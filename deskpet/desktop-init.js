@@ -102,6 +102,36 @@
     );
   }
 
+  /**
+   * 全屏视线跟踪：根据屏幕光标相对窗口中心更新 focusController
+   * （点击穿透时窗口收不到 mousemove，必须用主进程光标）
+   */
+  function setupScreenTracking(widget) {
+    const api = window.deskpet;
+    if (!api || !api.onCursor) return;
+
+    api.onCursor((payload) => {
+      const model = widget && widget.model;
+      const focus =
+        model &&
+        model.internalModel &&
+        model.internalModel.focusController;
+      if (!focus || typeof focus.focus !== 'function') return;
+
+      const cx = payload.winX + payload.winW / 2;
+      const cy = payload.winY + payload.winH / 2;
+      // 以当前显示器宽高的一半为满偏量，鼠标到屏边即看向极限
+      const rangeX = Math.max(payload.screenW / 2, 1);
+      const rangeY = Math.max(payload.screenH / 2, 1);
+      let fx = (payload.x - cx) / rangeX;
+      let fy = (payload.y - cy) / rangeY;
+      fx = Math.max(-1, Math.min(1, fx));
+      fy = Math.max(-1, Math.min(1, fy));
+      // Live2D 垂直方向与屏幕相反
+      focus.focus(fx, -fy);
+    });
+  }
+
   function start() {
     if (typeof Live2DWidget === 'undefined' || !Live2DWidget.init) {
       console.error('Live2DWidget 未加载');
@@ -160,6 +190,7 @@
           requestAnimationFrame(() => fitModelToView(widget));
         });
         setupWindowDrag();
+        setupScreenTracking(widget);
         window.__deskpetWidget = widget;
       })
       .catch((err) => {

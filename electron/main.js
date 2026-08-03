@@ -26,6 +26,9 @@ let tray = null;
 /** 拖窗状态 */
 let dragState = null;
 
+/** 全屏光标跟踪定时器 */
+let cursorTrackTimer = null;
+
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
 function loadSettings() {
@@ -47,6 +50,37 @@ function saveSettings(settings) {
 }
 
 let settings = { clickThrough: false };
+
+function stopCursorTracking() {
+  if (cursorTrackTimer) {
+    clearInterval(cursorTrackTimer);
+    cursorTrackTimer = null;
+  }
+}
+
+function startCursorTracking() {
+  stopCursorTracking();
+  cursorTrackTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
+    if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = mainWindow.getBounds();
+    const display = screen.getDisplayNearestPoint(cursor);
+    const area = display.bounds;
+    mainWindow.webContents.send('pet:cursor', {
+      x: cursor.x,
+      y: cursor.y,
+      winX: bounds.x,
+      winY: bounds.y,
+      winW: bounds.width,
+      winH: bounds.height,
+      screenX: area.x,
+      screenY: area.y,
+      screenW: area.width,
+      screenH: area.height,
+    });
+  }, 33); // ~30fps
+}
 
 function applyClickThrough(enabled) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -178,11 +212,19 @@ function createWindow() {
     mainWindow.show();
     mainWindow.setBackgroundColor('#00000000');
     forceRedrawFrame();
+    startCursorTracking();
     setTimeout(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       mainWindow.setOpacity(1);
       forceRedrawFrame();
     }, 80);
+  });
+
+  mainWindow.on('show', () => {
+    startCursorTracking();
+  });
+  mainWindow.on('hide', () => {
+    stopCursorTracking();
   });
 
   mainWindow.on('blur', () => {
@@ -194,6 +236,7 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    stopCursorTracking();
     mainWindow = null;
   });
 }
@@ -252,6 +295,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {});
 
 app.on('before-quit', () => {
+  stopCursorTracking();
   if (tray) {
     tray.destroy();
     tray = null;
