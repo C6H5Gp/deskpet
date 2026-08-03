@@ -38,11 +38,6 @@ let getAsyncKeyState = null;
 /** 上一轮按键按下状态（vk → boolean） */
 const keyDownPrev = new Map();
 
-/** 打字动作节流时间戳 */
-let lastTypeKeyAt = 0;
-
-const TYPE_KEY_COOLDOWN_MS = 280;
-
 /** 纯修饰键 / 鼠标键，不触发桌宠动作 */
 const KEY_IGNORE = new Set([
   0x01, 0x02, 0x04, 0x05, 0x06, // 鼠标
@@ -180,7 +175,6 @@ function startKeyTracking() {
     if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
     if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
 
-    const now = Date.now();
     /** @type {'enter' | 'type' | null} */
     let eventType = null;
 
@@ -199,12 +193,10 @@ function startKeyTracking() {
     }
 
     if (!eventType) return;
-    if (eventType === 'type') {
-      if (now - lastTypeKeyAt < TYPE_KEY_COOLDOWN_MS) return;
-      lastTypeKeyAt = now;
-    }
-
-    mainWindow.webContents.send('pet:key', { type: eventType, at: now });
+    mainWindow.webContents.send('pet:key', {
+      type: eventType,
+      at: Date.now(),
+    });
   }, 33);
 }
 
