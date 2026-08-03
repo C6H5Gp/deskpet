@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>桌宠 · Live2D（提取自 blog.xyy.world）</title>
+  <style>
+    :root {
+      --bg0: #1a2332;
+      --bg1: #2d3a4f;
+      --ink: #e8eef6;
+      --muted: #9aabbf;
+      --accent: #6ec6b0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 80% 50% at 20% 10%, #3a4d66 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 90% 80%, #2a3f3a 0%, transparent 50%),
+        linear-gradient(160deg, var(--bg0), var(--bg1));
+    }
+    main {
+      max-width: 720px;
+      padding: 48px 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.75rem;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+    }
+    p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    code {
+      color: var(--accent);
+      font-size: 0.92em;
+    }
+    ul {
+      color: var(--muted);
+      line-height: 1.7;
+      padding-left: 1.2em;
+    }
+    .hint {
+      margin-top: 28px;
+      padding: 14px 16px;
+      border-left: 3px solid var(--accent);
+      background: rgba(110, 198, 176, 0.08);
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>桌宠预览</h1>
+    <p>从 <code>blog.xyy.world</code> 提取的 Live2D 桌宠（LPK 模型 + LPKRender）。</p>
+    <p>角色应出现在页面右下角；点击耳朵 / 头 / 身体可触发对应动作。</p>
+    <ul>
+      <li>渲染库：<code>lpkr.min.js</code>（LPKRender）</li>
+      <li>模型包：<code>deskpet/model/pet.lpk</code></li>
+      <li>配置：<code>deskpet/init.js</code></li>
+    </ul>
+    <div class="hint">
+      请用本地静态服务器打开本页（勿直接用 file://），例如：
+      <br /><code>npx --yes serve "f:\桌宠" -p 5173</code>
+    </div>
+  </main>
+
+  <!-- LPK 解包与 Live2D 挂载 -->
+  <script src="./deskpet/libs/lpkr.min.js"></script>
+  <script src="./deskpet/init.js"></script>
+</body>
+</html>
