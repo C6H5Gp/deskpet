@@ -132,6 +132,56 @@
     });
   }
 
+  /**
+   * 在动作组中按名称片段查找索引
+   * @param {Record<string, Array<{ Name?: string }>>} groups
+   * @param {string} group
+   * @param {string} namePart
+   * @returns {number}
+   */
+  function findMotionIndex(groups, group, namePart) {
+    const list = groups && groups[group];
+    if (!Array.isArray(list)) return -1;
+    return list.findIndex((m) => (m && m.Name ? m.Name : '').includes(namePart));
+  }
+
+  /**
+   * 全局按键 → 播放「桌面」组动作：打字随机按键1/2/3，回车播回车
+   */
+  function setupKeyboardReaction(widget) {
+    const api = window.deskpet;
+    if (!api || !api.onKey || !widget) return;
+
+    const group = '桌面';
+    const keyNames = ['按键1', '按键2', '按键3'];
+    let keyIndices = null;
+    let enterIndex = -1;
+
+    function ensureIndices() {
+      if (keyIndices) return;
+      const groups = widget.motionGroups || {};
+      keyIndices = keyNames
+        .map((n) => findMotionIndex(groups, group, n))
+        .filter((i) => i >= 0);
+      enterIndex = findMotionIndex(groups, group, '回车');
+    }
+
+    api.onKey((payload) => {
+      ensureIndices();
+      if (!widget.playMotion) return;
+
+      if (payload && payload.type === 'enter') {
+        if (enterIndex >= 0) widget.playMotion(group, enterIndex);
+        return;
+      }
+
+      if (payload && payload.type === 'type' && keyIndices && keyIndices.length) {
+        const idx = keyIndices[Math.floor(Math.random() * keyIndices.length)];
+        widget.playMotion(group, idx);
+      }
+    });
+  }
+
   function start() {
     if (typeof Live2DWidget === 'undefined' || !Live2DWidget.init) {
       console.error('Live2DWidget 未加载');
@@ -191,6 +241,7 @@
         });
         setupWindowDrag();
         setupScreenTracking(widget);
+        setupKeyboardReaction(widget);
         window.__deskpetWidget = widget;
       })
       .catch((err) => {

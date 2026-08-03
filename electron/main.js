@@ -29,6 +29,31 @@ let dragState = null;
 /** 全屏光标跟踪定时器 */
 let cursorTrackTimer = null;
 
+/** 全局键盘轮询定时器 */
+let keyTrackTimer = null;
+
+/** @type {((vk: number) => number) | null} */
+let getAsyncKeyState = null;
+
+/** 上一轮按键按下状态（vk → boolean） */
+const keyDownPrev = new Map();
+
+/** 打字动作节流时间戳 */
+let lastTypeKeyAt = 0;
+
+const TYPE_KEY_COOLDOWN_MS = 280;
+
+/** 纯修饰键 / 鼠标键，不触发桌宠动作 */
+const KEY_IGNORE = new Set([
+  0x01, 0x02, 0x04, 0x05, 0x06, // 鼠标
+  0x10, 0x11, 0x12, // Shift / Ctrl / Alt
+  0x14, 0x90, 0x91, // Caps / Num / Scroll
+  0x5b, 0x5c, 0x5d, // Win / Apps
+  0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, // 左右修饰键
+]);
+
+const VK_RETURN = 0x0d;
+
 /**
  * 用户态可见性（不以 isVisible 为唯一依据）。
  * Windows 透明 + focusable:false 时，hide/show 后 Electron 的 isVisible 可能与真实状态脱节。
@@ -121,6 +146,68 @@ function stopCursorTracking() {
   }
 }
 
+function initKeyApi() {
+  if (getAsyncKeyState) return true;
+  if (process.platform !== 'win32') return false;
+  try {
+    const koffi = require('koffi');
+    const user32 = koffi.load('user32.dll');
+    getAsyncKeyState = user32.func('int16_t __stdcall GetAsyncKeyState(int)');
+    return true;
+  } catch (err) {
+    console.error('初始化键盘监听失败:', err);
+    return false;
+  }
+}
+
+function stopKeyTracking() {
+  if (keyTrackTimer) {
+    clearInterval(keyTrackTimer);
+    keyTrackTimer = null;
+  }
+  keyDownPrev.clear();
+}
+
+/**
+ * 轮询全局按键（窗口 focusable:false 时 DOM 收不到键盘）
+ * Enter → enter；其它非修饰键按下 → type（带节流）
+ */
+function startKeyTracking() {
+  stopKeyTracking();
+  if (!initKeyApi() || !getAsyncKeyState) return;
+
+  keyTrackTimer = setInterval(() => {
+    if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
+
+    const now = Date.now();
+    /** @type {'enter' | 'type' | null} */
+    let eventType = null;
+
+    for (let vk = 0x08; vk <= 0xfe; vk++) {
+      if (KEY_IGNORE.has(vk)) continue;
+      const down = (getAsyncKeyState(vk) & 0x8000) !== 0;
+      const wasDown = keyDownPrev.get(vk) === true;
+      keyDownPrev.set(vk, down);
+      if (!down || wasDown) continue;
+
+      if (vk === VK_RETURN) {
+        eventType = 'enter';
+        break;
+      }
+      if (!eventType) eventType = 'type';
+    }
+
+    if (!eventType) return;
+    if (eventType === 'type') {
+      if (now - lastTypeKeyAt < TYPE_KEY_COOLDOWN_MS) return;
+      lastTypeKeyAt = now;
+    }
+
+    mainWindow.webContents.send('pet:key', { type: eventType, at: now });
+  }, 33);
+}
+
 function startCursorTracking() {
   stopCursorTracking();
   cursorTrackTimer = setInterval(() => {
@@ -171,6 +258,7 @@ function showMainWindow() {
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
   applyClickThrough(settings.clickThrough);
   startCursorTracking();
+  startKeyTracking();
 }
 
 function hideMainWindow() {
@@ -178,6 +266,7 @@ function hideMainWindow() {
   petVisible = false;
   mainWindow.hide();
   stopCursorTracking();
+  stopKeyTracking();
 }
 
 function toggleMainWindow() {
@@ -316,6 +405,7 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     stopCursorTracking();
+    stopKeyTracking();
     mainWindow = null;
   });
 }
@@ -379,6 +469,7 @@ app.on('window-all-closed', () => {});
 app.on('before-quit', () => {
   persistWindowPosition();
   stopCursorTracking();
+  stopKeyTracking();
   if (tray) {
     tray.destroy();
     tray = null;

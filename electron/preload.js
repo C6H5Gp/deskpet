@@ -26,4 +26,14 @@ contextBridge.exposeInMainWorld('deskpet', {
     ipcRenderer.on('pet:cursor', handler);
     return () => ipcRenderer.removeListener('pet:cursor', handler);
   },
+  /**
+   * 订阅全局按键（主进程 Win32 轮询）
+   * @param {(payload: { type: 'enter' | 'type', at: number }) => void} callback
+   * @returns {() => void}
+   */
+  onKey: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('pet:key', handler);
+    return () => ipcRenderer.removeListener('pet:key', handler);
+  },
 });
