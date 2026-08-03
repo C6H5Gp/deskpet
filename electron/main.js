@@ -34,9 +34,20 @@ const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 function loadSettings() {
   try {
     const raw = fs.readFileSync(settingsPath(), 'utf8');
-    return { clickThrough: false, windowX: null, windowY: null, ...JSON.parse(raw) };
+    return {
+      clickThrough: false,
+      openAtLogin: true,
+      windowX: null,
+      windowY: null,
+      ...JSON.parse(raw),
+    };
   } catch {
-    return { clickThrough: false, windowX: null, windowY: null };
+    return {
+      clickThrough: false,
+      openAtLogin: true,
+      windowX: null,
+      windowY: null,
+    };
   }
 }
 
@@ -50,7 +61,12 @@ function saveSettings(next) {
   }
 }
 
-let settings = { clickThrough: false, windowX: null, windowY: null };
+let settings = {
+  clickThrough: false,
+  openAtLogin: true,
+  windowX: null,
+  windowY: null,
+};
 
 /** 保存当前窗口位置 */
 function persistWindowPosition() {
@@ -132,6 +148,18 @@ function applyClickThrough(enabled) {
   }
 }
 
+/** 开机自启（仅打包后的 exe 写入系统登录项） */
+function applyOpenAtLogin(enabled) {
+  if (!app.isPackaged) {
+    console.log('[deskpet] 开机自启偏好已保存，打包为 exe 后才会写入系统登录项:', enabled);
+    return;
+  }
+  app.setLoginItemSettings({
+    openAtLogin: !!enabled,
+    name: '桌宠',
+  });
+}
+
 function createTrayIcon() {
   const size = 16;
   const bitmap = Buffer.alloc(size * size * 4);
@@ -174,6 +202,16 @@ function buildTrayMenu() {
         settings.clickThrough = item.checked;
         applyClickThrough(settings.clickThrough);
         saveSettings({ clickThrough: settings.clickThrough });
+      },
+    },
+    {
+      label: '开机自启',
+      type: 'checkbox',
+      checked: !!settings.openAtLogin,
+      click: (item) => {
+        settings.openAtLogin = item.checked;
+        saveSettings({ openAtLogin: settings.openAtLogin });
+        applyOpenAtLogin(settings.openAtLogin);
       },
     },
     { type: 'separator' },
@@ -297,6 +335,12 @@ function setupIpc() {
 
 app.whenReady().then(() => {
   settings = loadSettings();
+  // 首次或偏好为真时同步登录项
+  if (typeof settings.openAtLogin !== 'boolean') {
+    settings.openAtLogin = true;
+    saveSettings({ openAtLogin: true });
+  }
+  applyOpenAtLogin(settings.openAtLogin);
   setupIpc();
   // 稍延迟创建，让 transparent visuals 就绪
   setTimeout(() => {

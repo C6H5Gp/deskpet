@@ -2,13 +2,58 @@
   "name": "deskpet",
   "version": "1.0.0",
   "description": "Live2D desktop pet",
+  "author": "deskpet",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "web": "npx --yes serve . -p 5173",
-    "postinstall": "node node_modules/electron/install.js"
+    "postinstall": "node node_modules/electron/install.js",
+    "dist": "electron-builder --win",
+    "dist:dir": "electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "world.deskpet.app",
+    "productName": "桌宠",
+    "copyright": "Copyright © deskpet",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "deskpet/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "signAndEditExecutable": false,
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "桌宠",
+      "uninstallDisplayName": "桌宠"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
   },
   "devDependencies": {
-    "electron": "37.2.6"
+    "electron": "37.2.6",
+    "electron-builder": "^26.0.12"
   }
 }
