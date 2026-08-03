@@ -10,6 +10,9 @@ const {
 const path = require('path');
 const fs = require('fs');
 
+// Windows 下透明窗需尽早开启，否则易出现黑底 / 标题栏残留
+app.commandLine.appendSwitch('enable-transparent-visuals');
+
 const WIN_W = 640;
 const WIN_H = 640;
 
@@ -111,19 +114,28 @@ function createWindow() {
   const x = Math.round(workArea.x + workArea.width - WIN_W - 16);
   const y = Math.round(workArea.y + workArea.height - WIN_H - 16);
 
+  // 彻底去掉菜单，避免 Windows 画出标题栏区域
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
     width: WIN_W,
     height: WIN_H,
     x,
     y,
+    title: '',
     transparent: true,
     frame: false,
+    thickFrame: false,
+    roundedCorners: false,
+    autoHideMenuBar: true,
     alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: false,
     resizable: false,
     maximizable: false,
+    minimizable: false,
     fullscreenable: false,
+    focusable: true,
     show: false,
     backgroundColor: '#00000000',
     webPreferences: {
@@ -131,14 +143,20 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
 
+  mainWindow.setMenu(null);
+  mainWindow.setMenuBarVisibility(false);
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
   mainWindow.loadFile(path.join(__dirname, '..', 'deskpet', 'pet.html'));
 
   mainWindow.once('ready-to-show', () => {
     applyClickThrough(settings.clickThrough);
+    // 再清一次，防止部分 Windows 版本恢复系统菜单
+    mainWindow.setMenu(null);
+    mainWindow.setMenuBarVisibility(false);
     mainWindow.show();
   });
 
