@@ -10,8 +10,10 @@ const {
 const path = require('path');
 const fs = require('fs');
 
-// Windows 下透明窗需尽早开启，否则易出现黑底 / 标题栏残留
-app.commandLine.appendSwitch('enable-transparent-visuals');
+// Windows 透明合成
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('enable-transparent-visuals');
+}
 
 const WIN_W = 640;
 const WIN_H = 640;
@@ -55,6 +57,21 @@ function applyClickThrough(enabled) {
   }
 }
 
+/**
+ * Electron Windows 透明窗失焦后可能冒出系统标题栏（已知 bug）。
+ * 轻微改尺寸强制 DWM 重绘，去掉伪标题条。
+ */
+function forceRedrawFrame() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [w, h] = mainWindow.getSize();
+  const canResize = mainWindow.isResizable();
+  if (!canResize) mainWindow.setResizable(true);
+  mainWindow.setSize(w, h + 1);
+  mainWindow.setSize(w, h);
+  if (!canResize) mainWindow.setResizable(false);
+  mainWindow.setBackgroundColor('#00000000');
+}
+
 function createTrayIcon() {
   const size = 16;
   const bitmap = Buffer.alloc(size * size * 4);
@@ -85,6 +102,7 @@ function buildTrayMenu() {
           mainWindow.hide();
         } else {
           mainWindow.show();
+          forceRedrawFrame();
         }
         tray.setContextMenu(buildTrayMenu());
       },
@@ -114,7 +132,6 @@ function createWindow() {
   const x = Math.round(workArea.x + workArea.width - WIN_W - 16);
   const y = Math.round(workArea.y + workArea.height - WIN_H - 16);
 
-  // 彻底去掉菜单，避免 Windows 画出标题栏区域
   Menu.setApplicationMenu(null);
 
   mainWindow = new BrowserWindow({
@@ -125,7 +142,7 @@ function createWindow() {
     title: '',
     transparent: true,
     frame: false,
-    thickFrame: false,
+    // 不要设 titleBarStyle: 'hidden'（与 transparent 组合在 Win 上更容易冒标题栏）
     roundedCorners: false,
     autoHideMenuBar: true,
     alwaysOnTop: true,
@@ -154,10 +171,26 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     applyClickThrough(settings.clickThrough);
-    // 再清一次，防止部分 Windows 版本恢复系统菜单
     mainWindow.setMenu(null);
     mainWindow.setMenuBarVisibility(false);
+    // 先以透明显示，再强制重绘去掉可能的伪标题栏
+    mainWindow.setOpacity(0.99);
     mainWindow.show();
+    mainWindow.setBackgroundColor('#00000000');
+    forceRedrawFrame();
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.setOpacity(1);
+      forceRedrawFrame();
+    }, 80);
+  });
+
+  mainWindow.on('blur', () => {
+    // 失焦时 Windows 常画出蓝色/灰色标题条，立刻重绘抹掉
+    setTimeout(forceRedrawFrame, 0);
+  });
+  mainWindow.on('focus', () => {
+    setTimeout(forceRedrawFrame, 0);
   });
 
   mainWindow.on('closed', () => {
@@ -175,6 +208,7 @@ function createTray() {
       mainWindow.hide();
     } else {
       mainWindow.show();
+      forceRedrawFrame();
     }
     tray.setContextMenu(buildTrayMenu());
   });
@@ -208,11 +242,13 @@ function setupIpc() {
 app.whenReady().then(() => {
   settings = loadSettings();
   setupIpc();
-  createWindow();
-  createTray();
+  // 稍延迟创建，让 transparent visuals 就绪
+  setTimeout(() => {
+    createWindow();
+    createTray();
+  }, 50);
 });
 
-// 托盘常驻：所有窗口关闭后也不退出（由托盘「退出」结束进程）
 app.on('window-all-closed', () => {});
 
 app.on('before-quit', () => {

@@ -8,7 +8,7 @@
     "web": "npx --yes serve . -p 5173"
   },
   "devDependencies": {
-    "electron": "^35.0.0"
+    "electron": "^37.2.6"
   },
   "allowScripts": {}
 }
