@@ -27,13 +27,16 @@ contextBridge.exposeInMainWorld('deskpet', {
     return () => ipcRenderer.removeListener('pet:cursor', handler);
   },
   /**
-   * 订阅全局按键（主进程 Win32 轮询）
-   * @param {(payload: { type: 'enter' | 'type', at: number }) => void} callback
+   * 订阅全局键鼠（主进程 Win32 轮询）
+   * @param {(payload: {
+   *   type: 'enter' | 'type' | 'mouse' | 'mousemove',
+   *   dx?: number, dy?: number, at: number
+   * }) => void} callback
    * @returns {() => void}
    */
-  onKey: (callback) => {
+  onInput: (callback) => {
     const handler = (_event, payload) => callback(payload);
-    ipcRenderer.on('pet:key', handler);
-    return () => ipcRenderer.removeListener('pet:key', handler);
+    ipcRenderer.on('pet:input', handler);
+    return () => ipcRenderer.removeListener('pet:input', handler);
   },
 });

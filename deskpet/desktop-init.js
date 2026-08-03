@@ -146,16 +146,20 @@
   }
 
   /**
-   * 全局按键 → 播放「桌面」组动作：打字随机按键1/2/3，回车播回车
+   * 全局键鼠 → 播放「桌面」组动作
+   * 打字→按键1/2/3，回车→回车，点击→鼠标，移动→左/右
    */
-  function setupKeyboardReaction(widget) {
+  function setupInputReaction(widget) {
     const api = window.deskpet;
-    if (!api || !api.onKey || !widget) return;
+    if (!api || !api.onInput || !widget) return;
 
     const group = '桌面';
     const keyNames = ['按键1', '按键2', '按键3'];
     let keyIndices = null;
     let enterIndex = -1;
+    let mouseIndex = -1;
+    let leftIndex = -1;
+    let rightIndex = -1;
 
     function ensureIndices() {
       if (keyIndices) return;
@@ -164,20 +168,43 @@
         .map((n) => findMotionIndex(groups, group, n))
         .filter((i) => i >= 0);
       enterIndex = findMotionIndex(groups, group, '回车');
+      mouseIndex = findMotionIndex(groups, group, '鼠标');
+      leftIndex = findMotionIndex(groups, group, '/左.motion3');
+      rightIndex = findMotionIndex(groups, group, '/右.motion3');
+      // 名称兜底：避免「左右」误匹配
+      if (leftIndex < 0) leftIndex = findMotionIndex(groups, group, '左');
+      if (rightIndex < 0) rightIndex = findMotionIndex(groups, group, '右');
     }
 
-    api.onKey((payload) => {
+    api.onInput((payload) => {
       ensureIndices();
-      if (!widget.playMotion) return;
+      if (!widget.playMotion || !payload) return;
 
-      if (payload && payload.type === 'enter') {
+      if (payload.type === 'enter') {
         if (enterIndex >= 0) widget.playMotion(group, enterIndex);
         return;
       }
 
-      if (payload && payload.type === 'type' && keyIndices && keyIndices.length) {
+      if (payload.type === 'type' && keyIndices && keyIndices.length) {
         const idx = keyIndices[Math.floor(Math.random() * keyIndices.length)];
         widget.playMotion(group, idx);
+        return;
+      }
+
+      if (payload.type === 'mouse') {
+        if (mouseIndex >= 0) widget.playMotion(group, mouseIndex);
+        return;
+      }
+
+      if (payload.type === 'mousemove') {
+        const dx = typeof payload.dx === 'number' ? payload.dx : 0;
+        if (dx < 0 && leftIndex >= 0) {
+          widget.playMotion(group, leftIndex);
+        } else if (dx > 0 && rightIndex >= 0) {
+          widget.playMotion(group, rightIndex);
+        } else if (mouseIndex >= 0) {
+          widget.playMotion(group, mouseIndex);
+        }
       }
     });
   }
@@ -241,7 +268,7 @@
         });
         setupWindowDrag();
         setupScreenTracking(widget);
-        setupKeyboardReaction(widget);
+        setupInputReaction(widget);
         window.__deskpetWidget = widget;
       })
       .catch((err) => {
