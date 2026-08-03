@@ -146,8 +146,8 @@
   }
 
   /**
-   * 全局键鼠 → 播放「桌面」组动作
-   * 打字→按键1/2/3，回车→回车，移动→左/右（不响应鼠标点击）
+   * 全局键盘 → 播放「桌面」组动作
+   * 打字→按键1/2/3，回车→回车，←/→→左/右
    */
   function setupInputReaction(widget) {
     const api = window.deskpet;
@@ -182,19 +182,19 @@
         return;
       }
 
-      if (payload.type === 'type' && keyIndices && keyIndices.length) {
-        const idx = keyIndices[Math.floor(Math.random() * keyIndices.length)];
-        widget.playMotion(group, idx);
+      if (payload.type === 'left') {
+        if (leftIndex >= 0) widget.playMotion(group, leftIndex);
         return;
       }
 
-      if (payload.type === 'mousemove') {
-        const dx = typeof payload.dx === 'number' ? payload.dx : 0;
-        if (dx < 0 && leftIndex >= 0) {
-          widget.playMotion(group, leftIndex);
-        } else if (dx > 0 && rightIndex >= 0) {
-          widget.playMotion(group, rightIndex);
-        }
+      if (payload.type === 'right') {
+        if (rightIndex >= 0) widget.playMotion(group, rightIndex);
+        return;
+      }
+
+      if (payload.type === 'type' && keyIndices && keyIndices.length) {
+        const idx = keyIndices[Math.floor(Math.random() * keyIndices.length)];
+        widget.playMotion(group, idx);
       }
     });
   }

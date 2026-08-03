@@ -35,18 +35,12 @@ let inputTrackTimer = null;
 /** @type {((vk: number) => number) | null} */
 let getAsyncKeyState = null;
 
-/** 上一轮按键/鼠标键按下状态（vk → boolean） */
+/** 上一轮按键按下状态（vk → boolean） */
 const keyDownPrev = new Map();
 
-/** 上次触发鼠标移动动作时的光标位置 */
-let lastMouseMotionPos = null;
-
-/** 鼠标移动触发动作的最小位移（像素） */
-const MOUSE_MOVE_THRESHOLD = 12;
-
-/** 纯修饰键，不触发桌宠动作 */
+/** 纯修饰键 / 鼠标键，不触发桌宠动作 */
 const KEY_IGNORE = new Set([
-  0x01, 0x02, 0x04, 0x05, 0x06, // 鼠标按键（不响应点击）
+  0x01, 0x02, 0x04, 0x05, 0x06, // 鼠标按键
   0x10, 0x11, 0x12, // Shift / Ctrl / Alt
   0x14, 0x90, 0x91, // Caps / Num / Scroll
   0x5b, 0x5c, 0x5d, // Win / Apps
@@ -54,6 +48,8 @@ const KEY_IGNORE = new Set([
 ]);
 
 const VK_RETURN = 0x0d;
+const VK_LEFT = 0x25;
+const VK_RIGHT = 0x27;
 
 /**
  * 用户态可见性（不以 isVisible 为唯一依据）。
@@ -167,7 +163,6 @@ function stopInputTracking() {
     inputTrackTimer = null;
   }
   keyDownPrev.clear();
-  lastMouseMotionPos = null;
 }
 
 function sendInput(payload) {
@@ -177,8 +172,8 @@ function sendInput(payload) {
 }
 
 /**
- * 轮询全局键鼠（窗口 focusable:false 时 DOM 收不到）
- * Enter → enter；其它键 → type；光标移动 → mousemove（不响应鼠标点击）
+ * 轮询全局键盘（窗口 focusable:false 时 DOM 收不到）
+ * Enter → enter；←/→ → left/right；其它键 → type
  */
 function startInputTracking() {
   stopInputTracking();
@@ -188,10 +183,9 @@ function startInputTracking() {
     if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
     if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
 
-    /** @type {'enter' | 'type' | null} */
+    /** @type {'enter' | 'type' | 'left' | 'right' | null} */
     let eventType = null;
 
-    // 键盘
     for (let vk = 0x08; vk <= 0xfe; vk++) {
       if (KEY_IGNORE.has(vk)) continue;
       const down = (getAsyncKeyState(vk) & 0x8000) !== 0;
@@ -203,28 +197,19 @@ function startInputTracking() {
         eventType = 'enter';
         break;
       }
+      if (vk === VK_LEFT) {
+        eventType = 'left';
+        break;
+      }
+      if (vk === VK_RIGHT) {
+        eventType = 'right';
+        break;
+      }
       if (!eventType) eventType = 'type';
     }
 
     if (eventType) {
       sendInput({ type: eventType });
-    }
-
-    // 鼠标移动 → 左右动作
-    const cursor = screen.getCursorScreenPoint();
-    if (!lastMouseMotionPos) {
-      lastMouseMotionPos = { x: cursor.x, y: cursor.y };
-      return;
-    }
-    const dx = cursor.x - lastMouseMotionPos.x;
-    const dy = cursor.y - lastMouseMotionPos.y;
-    if (dx * dx + dy * dy >= MOUSE_MOVE_THRESHOLD * MOUSE_MOVE_THRESHOLD) {
-      lastMouseMotionPos = { x: cursor.x, y: cursor.y };
-      sendInput({
-        type: 'mousemove',
-        dx,
-        dy,
-      });
     }
   }, 33);
 }
