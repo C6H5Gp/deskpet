@@ -34,14 +34,15 @@ const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 function loadSettings() {
   try {
     const raw = fs.readFileSync(settingsPath(), 'utf8');
-    return { clickThrough: false, ...JSON.parse(raw) };
+    return { clickThrough: false, windowX: null, windowY: null, ...JSON.parse(raw) };
   } catch {
-    return { clickThrough: false };
+    return { clickThrough: false, windowX: null, windowY: null };
   }
 }
 
-function saveSettings(settings) {
+function saveSettings(next) {
   try {
+    settings = { ...settings, ...next };
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf8');
   } catch (err) {
@@ -49,7 +50,47 @@ function saveSettings(settings) {
   }
 }
 
-let settings = { clickThrough: false };
+let settings = { clickThrough: false, windowX: null, windowY: null };
+
+/** 保存当前窗口位置 */
+function persistWindowPosition() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [x, y] = mainWindow.getPosition();
+  saveSettings({ windowX: x, windowY: y });
+}
+
+/**
+ * 解析初始坐标：优先用上次位置（需仍落在某块屏幕上），否则右下角
+ */
+function resolveWindowPosition() {
+  const fallback = () => {
+    const { workArea } = screen.getPrimaryDisplay();
+    return {
+      x: Math.round(workArea.x + workArea.width - WIN_W - 16),
+      y: Math.round(workArea.y + workArea.height - WIN_H - 16),
+    };
+  };
+
+  const sx = settings.windowX;
+  const sy = settings.windowY;
+  if (typeof sx !== 'number' || typeof sy !== 'number' || Number.isNaN(sx) || Number.isNaN(sy)) {
+    return fallback();
+  }
+
+  // 窗口中心点仍在某显示器工作区内才恢复，避免换分辨率后飞出屏幕
+  const cx = sx + WIN_W / 2;
+  const cy = sy + WIN_H / 2;
+  const display = screen.getDisplayNearestPoint({ x: Math.round(cx), y: Math.round(cy) });
+  const area = display.workArea;
+  const visible =
+    cx >= area.x &&
+    cx <= area.x + area.width &&
+    cy >= area.y &&
+    cy <= area.y + area.height;
+
+  if (!visible) return fallback();
+  return { x: Math.round(sx), y: Math.round(sy) };
+}
 
 function stopCursorTracking() {
   if (cursorTrackTimer) {
@@ -132,13 +173,14 @@ function buildTrayMenu() {
       click: (item) => {
         settings.clickThrough = item.checked;
         applyClickThrough(settings.clickThrough);
-        saveSettings(settings);
+        saveSettings({ clickThrough: settings.clickThrough });
       },
     },
     { type: 'separator' },
     {
       label: '退出',
       click: () => {
+        persistWindowPosition();
         app.quit();
       },
     },
@@ -146,9 +188,7 @@ function buildTrayMenu() {
 }
 
 function createWindow() {
-  const { workArea } = screen.getPrimaryDisplay();
-  const x = Math.round(workArea.x + workArea.width - WIN_W - 16);
-  const y = Math.round(workArea.y + workArea.height - WIN_H - 16);
+  const { x, y } = resolveWindowPosition();
 
   Menu.setApplicationMenu(null);
 
@@ -203,6 +243,11 @@ function createWindow() {
     stopCursorTracking();
   });
 
+  mainWindow.on('moved', () => {
+    // 拖动过程中也会触发；结束拖动时再写一次更稳妥，这里做轻量节流
+    if (!dragState) persistWindowPosition();
+  });
+
   mainWindow.on('closed', () => {
     stopCursorTracking();
     mainWindow = null;
@@ -246,6 +291,7 @@ function setupIpc() {
 
   ipcMain.on('pet:end-drag', () => {
     dragState = null;
+    persistWindowPosition();
   });
 }
 
@@ -262,6 +308,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {});
 
 app.on('before-quit', () => {
+  persistWindowPosition();
   stopCursorTracking();
   if (tray) {
     tray.destroy();
