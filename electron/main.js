@@ -29,6 +29,12 @@ let dragState = null;
 /** 全屏光标跟踪定时器 */
 let cursorTrackTimer = null;
 
+/**
+ * 用户态可见性（不以 isVisible 为唯一依据）。
+ * Windows 透明 + focusable:false 时，hide/show 后 Electron 的 isVisible 可能与真实状态脱节。
+ */
+let petVisible = true;
+
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
 function loadSettings() {
@@ -118,7 +124,7 @@ function stopCursorTracking() {
 function startCursorTracking() {
   stopCursorTracking();
   cursorTrackTimer = setInterval(() => {
-    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
+    if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
     if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
     const cursor = screen.getCursorScreenPoint();
     const bounds = mainWindow.getBounds();
@@ -145,6 +151,41 @@ function applyClickThrough(enabled) {
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
   } else {
     mainWindow.setIgnoreMouseEvents(false);
+  }
+}
+
+/**
+ * 显示桌宠窗口。
+ * Windows 上 transparent + focusable:false 时 showInactive() 经常无效，需用 show() 兜底并重申置顶。
+ */
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  petVisible = true;
+  try {
+    mainWindow.setOpacity(1);
+  } catch {
+    // 忽略个别平台不支持
+  }
+  // show() 在 focusable:false 时通常不抢焦点，比 showInactive 更可靠
+  mainWindow.show();
+  mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  applyClickThrough(settings.clickThrough);
+  startCursorTracking();
+}
+
+function hideMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  petVisible = false;
+  mainWindow.hide();
+  stopCursorTracking();
+}
+
+function toggleMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (petVisible) {
+    hideMainWindow();
+  } else {
+    showMainWindow();
   }
 }
 
@@ -180,18 +221,13 @@ function createTrayIcon() {
 }
 
 function buildTrayMenu() {
-  const visible = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+  const visible =
+    petVisible && mainWindow && !mainWindow.isDestroyed();
   return Menu.buildFromTemplate([
     {
       label: visible ? '隐藏' : '显示',
       click: () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        if (mainWindow.isVisible()) {
-          mainWindow.hide();
-        } else {
-          mainWindow.showInactive();
-        }
-        tray.setContextMenu(buildTrayMenu());
+        toggleMainWindow();
       },
     },
     {
@@ -269,16 +305,8 @@ function createWindow() {
     applyClickThrough(settings.clickThrough);
     mainWindow.setMenu(null);
     mainWindow.setMenuBarVisibility(false);
-    mainWindow.showInactive();
     mainWindow.setBackgroundColor('#00000000');
-    startCursorTracking();
-  });
-
-  mainWindow.on('show', () => {
-    startCursorTracking();
-  });
-  mainWindow.on('hide', () => {
-    stopCursorTracking();
+    showMainWindow();
   });
 
   mainWindow.on('moved', () => {
@@ -295,15 +323,12 @@ function createWindow() {
 function createTray() {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('桌宠');
-  tray.setContextMenu(buildTrayMenu());
+  // 不用固定 setContextMenu 作为右键唯一来源：每次右键现场 build，保证「显示/隐藏」文案正确
   tray.on('click', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (mainWindow.isVisible()) {
-      mainWindow.hide();
-    } else {
-      mainWindow.showInactive();
-    }
-    tray.setContextMenu(buildTrayMenu());
+    toggleMainWindow();
+  });
+  tray.on('right-click', () => {
+    tray.popUpContextMenu(buildTrayMenu());
   });
 }
 
