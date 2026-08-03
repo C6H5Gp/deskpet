@@ -186,10 +186,10 @@ function startInputTracking() {
     /** @type {'enter' | 'type' | 'left' | 'right' | null} */
     let eventType = null;
 
-    // 鼠标左右键
+    // 鼠标左右键（与模型动作左右相反：左键→右，右键→左）
     for (const [vk, type] of [
-      [VK_LBUTTON, 'left'],
-      [VK_RBUTTON, 'right'],
+      [VK_LBUTTON, 'right'],
+      [VK_RBUTTON, 'left'],
     ]) {
       const down = (getAsyncKeyState(vk) & 0x8000) !== 0;
       const wasDown = keyDownPrev.get(vk) === true;
