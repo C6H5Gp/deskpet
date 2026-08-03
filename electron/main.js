@@ -38,18 +38,18 @@ let getAsyncKeyState = null;
 /** 上一轮按键按下状态（vk → boolean） */
 const keyDownPrev = new Map();
 
-/** 纯修饰键 / 鼠标键，不触发桌宠动作 */
+/** 纯修饰键，不触发桌宠动作 */
 const KEY_IGNORE = new Set([
-  0x01, 0x02, 0x04, 0x05, 0x06, // 鼠标按键
+  0x04, 0x05, 0x06, // 中键 / 侧键
   0x10, 0x11, 0x12, // Shift / Ctrl / Alt
   0x14, 0x90, 0x91, // Caps / Num / Scroll
   0x5b, 0x5c, 0x5d, // Win / Apps
   0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, // 左右修饰键
 ]);
 
+const VK_LBUTTON = 0x01;
+const VK_RBUTTON = 0x02;
 const VK_RETURN = 0x0d;
-const VK_LEFT = 0x25;
-const VK_RIGHT = 0x27;
 
 /**
  * 用户态可见性（不以 isVisible 为唯一依据）。
@@ -172,8 +172,8 @@ function sendInput(payload) {
 }
 
 /**
- * 轮询全局键盘（窗口 focusable:false 时 DOM 收不到）
- * Enter → enter；←/→ → left/right；其它键 → type
+ * 轮询全局键鼠（窗口 focusable:false 时 DOM 收不到）
+ * Enter → enter；鼠标左/右键 → left/right；其它键 → type
  */
 function startInputTracking() {
   stopInputTracking();
@@ -186,6 +186,18 @@ function startInputTracking() {
     /** @type {'enter' | 'type' | 'left' | 'right' | null} */
     let eventType = null;
 
+    // 鼠标左右键
+    for (const [vk, type] of [
+      [VK_LBUTTON, 'left'],
+      [VK_RBUTTON, 'right'],
+    ]) {
+      const down = (getAsyncKeyState(vk) & 0x8000) !== 0;
+      const wasDown = keyDownPrev.get(vk) === true;
+      keyDownPrev.set(vk, down);
+      if (down && !wasDown) eventType = type;
+    }
+
+    // 键盘
     for (let vk = 0x08; vk <= 0xfe; vk++) {
       if (KEY_IGNORE.has(vk)) continue;
       const down = (getAsyncKeyState(vk) & 0x8000) !== 0;
@@ -197,15 +209,9 @@ function startInputTracking() {
         eventType = 'enter';
         break;
       }
-      if (vk === VK_LEFT) {
-        eventType = 'left';
-        break;
+      if (eventType !== 'enter' && eventType !== 'left' && eventType !== 'right') {
+        eventType = 'type';
       }
-      if (vk === VK_RIGHT) {
-        eventType = 'right';
-        break;
-      }
-      if (!eventType) eventType = 'type';
     }
 
     if (eventType) {

@@ -146,8 +146,8 @@
   }
 
   /**
-   * 全局键盘 → 播放「桌面」组动作
-   * 打字→按键1/2/3，回车→回车，←/→→左/右
+   * 全局键鼠 → 播放「桌面」组动作
+   * 打字→按键1/2/3，回车→回车，鼠标左/右键→左/右
    */
   function setupInputReaction(widget) {
     const api = window.deskpet;
