@@ -1,0 +1,14 @@
+{
+  "name": "deskpet",
+  "version": "1.0.0",
+  "description": "Live2D 桌面宠物（提取自 blog.xyy.world）",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "web": "npx --yes serve . -p 5173"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0"
+  },
+  "allowScripts": {}
+}
