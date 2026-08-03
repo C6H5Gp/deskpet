@@ -1,8 +1,9 @@
 /**
- * Electron 桌宠初始化：放大画布、居中完整模型、窗口拖动
+ * Electron 桌宠初始化：按包围盒自动居中缩放，避免偏位与裁切
  */
 (function () {
   const DRAG_THRESHOLD = 5;
+  const FIT_PADDING = 24;
 
   function fillContainer() {
     const container = document.getElementById('live2d-widget-container');
@@ -18,9 +19,35 @@
   }
 
   /**
-   * 在 LPKRender 自带拖动之上，改为拖 Electron 窗口；
-   * 超过阈值才算拖动，避免误触动作。
+   * 按模型实际包围盒缩放并居中，消除锚点偏移导致的裁切
    */
+  function fitModelToView(widget) {
+    const model = widget && widget.model;
+    const app = widget && widget.app;
+    if (!model || !app) return;
+
+    const screenW = app.screen.width;
+    const screenH = app.screen.height;
+    const pad = FIT_PADDING;
+
+    model.anchor.set(0.5, 0.5);
+    model.scale.set(1);
+    model.position.set(screenW / 2, screenH / 2);
+
+    const bounds1 = model.getBounds(true);
+    if (!bounds1.width || !bounds1.height) return;
+
+    const scale = Math.min(
+      (screenW - pad * 2) / bounds1.width,
+      (screenH - pad * 2) / bounds1.height
+    );
+    model.scale.set(scale);
+
+    const bounds2 = model.getBounds(true);
+    model.x += screenW / 2 - (bounds2.x + bounds2.width / 2);
+    model.y += screenH / 2 - (bounds2.y + bounds2.height / 2);
+  }
+
   function setupWindowDrag() {
     const api = window.deskpet;
     if (!api) return;
@@ -49,7 +76,6 @@
       window.removeEventListener('pointermove', onMove, true);
       window.removeEventListener('pointerup', onUp, true);
       window.removeEventListener('pointercancel', onUp, true);
-      // 发生拖动时吞掉 pointerup，避免 LPKRender 误播点击动作
       if (moved) {
         e.stopImmediatePropagation();
       }
@@ -82,8 +108,8 @@
       return;
     }
 
-    const w = window.innerWidth || 480;
-    const h = window.innerHeight || 560;
+    const w = window.innerWidth || 640;
+    const h = window.innerHeight || 640;
 
     const widgetOptions = {
       lpkFile: './model/pet.lpk',
@@ -91,14 +117,14 @@
       height: h,
       position: 'right',
       bottom: 0,
-      // 放大并居中，完整显示角色（解除原站半身裁切）
-      scale: 0.4,
+      // 初始 scale 仅占位，加载后由 fitModelToView 覆盖
+      scale: 0.25,
       modelX: 0.5,
       modelY: 0.5,
       modelYOffset: 0,
       mobileWidth: w,
       mobileHeight: h,
-      mobileScale: 0.4,
+      mobileScale: 0.25,
       mobilePosition: 'right',
       mobileBottom: 0,
       mobileModelX: 0.5,
@@ -126,9 +152,15 @@
     window.DESKPET_CONFIG = { options: widgetOptions };
 
     Live2DWidget.init(widgetOptions)
-      .then(() => {
+      .then((widget) => {
         fillContainer();
+        // 等一帧再测量，确保纹理与 bounds 就绪
+        requestAnimationFrame(() => {
+          fitModelToView(widget);
+          requestAnimationFrame(() => fitModelToView(widget));
+        });
         setupWindowDrag();
+        window.__deskpetWidget = widget;
       })
       .catch((err) => {
         console.error('桌宠初始化失败:', err);

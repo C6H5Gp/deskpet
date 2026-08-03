@@ -10,8 +10,8 @@ const {
 const path = require('path');
 const fs = require('fs');
 
-const WIN_W = 480;
-const WIN_H = 560;
+const WIN_W = 640;
+const WIN_H = 640;
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
