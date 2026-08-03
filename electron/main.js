@@ -46,19 +46,14 @@ const MOUSE_MOVE_THRESHOLD = 12;
 
 /** 纯修饰键，不触发桌宠动作 */
 const KEY_IGNORE = new Set([
+  0x01, 0x02, 0x04, 0x05, 0x06, // 鼠标按键（不响应点击）
   0x10, 0x11, 0x12, // Shift / Ctrl / Alt
   0x14, 0x90, 0x91, // Caps / Num / Scroll
   0x5b, 0x5c, 0x5d, // Win / Apps
   0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, // 左右修饰键
 ]);
 
-const VK_LBUTTON = 0x01;
-const VK_RBUTTON = 0x02;
-const VK_MBUTTON = 0x04;
-const VK_XBUTTON1 = 0x05;
-const VK_XBUTTON2 = 0x06;
 const VK_RETURN = 0x0d;
-const MOUSE_BUTTONS = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2];
 
 /**
  * 用户态可见性（不以 isVisible 为唯一依据）。
@@ -183,7 +178,7 @@ function sendInput(payload) {
 
 /**
  * 轮询全局键鼠（窗口 focusable:false 时 DOM 收不到）
- * Enter → enter；其它键 → type；鼠标键 → mouse；光标移动 → mousemove
+ * Enter → enter；其它键 → type；光标移动 → mousemove（不响应鼠标点击）
  */
 function startInputTracking() {
   stopInputTracking();
@@ -193,16 +188,8 @@ function startInputTracking() {
     if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
     if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
 
-    /** @type {'enter' | 'type' | 'mouse' | null} */
+    /** @type {'enter' | 'type' | null} */
     let eventType = null;
-
-    // 鼠标按键
-    for (const vk of MOUSE_BUTTONS) {
-      const down = (getAsyncKeyState(vk) & 0x8000) !== 0;
-      const wasDown = keyDownPrev.get(vk) === true;
-      keyDownPrev.set(vk, down);
-      if (down && !wasDown) eventType = 'mouse';
-    }
 
     // 键盘
     for (let vk = 0x08; vk <= 0xfe; vk++) {
@@ -216,14 +203,14 @@ function startInputTracking() {
         eventType = 'enter';
         break;
       }
-      if (eventType !== 'enter' && eventType !== 'mouse') eventType = 'type';
+      if (!eventType) eventType = 'type';
     }
 
     if (eventType) {
       sendInput({ type: eventType });
     }
 
-    // 鼠标移动 → 左右滑鼠动作
+    // 鼠标移动 → 左右动作
     const cursor = screen.getCursorScreenPoint();
     if (!lastMouseMotionPos) {
       lastMouseMotionPos = { x: cursor.x, y: cursor.y };
@@ -233,14 +220,11 @@ function startInputTracking() {
     const dy = cursor.y - lastMouseMotionPos.y;
     if (dx * dx + dy * dy >= MOUSE_MOVE_THRESHOLD * MOUSE_MOVE_THRESHOLD) {
       lastMouseMotionPos = { x: cursor.x, y: cursor.y };
-      // 点击当帧已发 mouse 时不再叠 mousemove，避免抢戏
-      if (eventType !== 'mouse') {
-        sendInput({
-          type: 'mousemove',
-          dx,
-          dy,
-        });
-      }
+      sendInput({
+        type: 'mousemove',
+        dx,
+        dy,
+      });
     }
   }, 33);
 }

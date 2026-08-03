@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('deskpet', {
   /**
    * 订阅全局键鼠（主进程 Win32 轮询）
    * @param {(payload: {
-   *   type: 'enter' | 'type' | 'mouse' | 'mousemove',
+   *   type: 'enter' | 'type' | 'mousemove',
    *   dx?: number, dy?: number, at: number
    * }) => void} callback
    * @returns {() => void}

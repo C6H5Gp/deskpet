@@ -147,7 +147,7 @@
 
   /**
    * 全局键鼠 → 播放「桌面」组动作
-   * 打字→按键1/2/3，回车→回车，点击→鼠标，移动→左/右
+   * 打字→按键1/2/3，回车→回车，移动→左/右（不响应鼠标点击）
    */
   function setupInputReaction(widget) {
     const api = window.deskpet;
@@ -157,7 +157,6 @@
     const keyNames = ['按键1', '按键2', '按键3'];
     let keyIndices = null;
     let enterIndex = -1;
-    let mouseIndex = -1;
     let leftIndex = -1;
     let rightIndex = -1;
 
@@ -168,10 +167,8 @@
         .map((n) => findMotionIndex(groups, group, n))
         .filter((i) => i >= 0);
       enterIndex = findMotionIndex(groups, group, '回车');
-      mouseIndex = findMotionIndex(groups, group, '鼠标');
       leftIndex = findMotionIndex(groups, group, '/左.motion3');
       rightIndex = findMotionIndex(groups, group, '/右.motion3');
-      // 名称兜底：避免「左右」误匹配
       if (leftIndex < 0) leftIndex = findMotionIndex(groups, group, '左');
       if (rightIndex < 0) rightIndex = findMotionIndex(groups, group, '右');
     }
@@ -191,19 +188,12 @@
         return;
       }
 
-      if (payload.type === 'mouse') {
-        if (mouseIndex >= 0) widget.playMotion(group, mouseIndex);
-        return;
-      }
-
       if (payload.type === 'mousemove') {
         const dx = typeof payload.dx === 'number' ? payload.dx : 0;
         if (dx < 0 && leftIndex >= 0) {
           widget.playMotion(group, leftIndex);
         } else if (dx > 0 && rightIndex >= 0) {
           widget.playMotion(group, rightIndex);
-        } else if (mouseIndex >= 0) {
-          widget.playMotion(group, mouseIndex);
         }
       }
     });
