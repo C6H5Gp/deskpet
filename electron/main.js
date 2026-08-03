@@ -91,21 +91,6 @@ function applyClickThrough(enabled) {
   }
 }
 
-/**
- * Electron Windows 透明窗失焦后可能冒出系统标题栏（已知 bug）。
- * 轻微改尺寸强制 DWM 重绘，去掉伪标题条。
- */
-function forceRedrawFrame() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const [w, h] = mainWindow.getSize();
-  const canResize = mainWindow.isResizable();
-  if (!canResize) mainWindow.setResizable(true);
-  mainWindow.setSize(w, h + 1);
-  mainWindow.setSize(w, h);
-  if (!canResize) mainWindow.setResizable(false);
-  mainWindow.setBackgroundColor('#00000000');
-}
-
 function createTrayIcon() {
   const size = 16;
   const bitmap = Buffer.alloc(size * size * 4);
@@ -135,8 +120,7 @@ function buildTrayMenu() {
         if (mainWindow.isVisible()) {
           mainWindow.hide();
         } else {
-          mainWindow.show();
-          forceRedrawFrame();
+          mainWindow.showInactive();
         }
         tray.setContextMenu(buildTrayMenu());
       },
@@ -176,7 +160,6 @@ function createWindow() {
     title: '',
     transparent: true,
     frame: false,
-    // 不要设 titleBarStyle: 'hidden'（与 transparent 组合在 Win 上更容易冒标题栏）
     roundedCorners: false,
     autoHideMenuBar: true,
     alwaysOnTop: true,
@@ -186,7 +169,8 @@ function createWindow() {
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
-    focusable: true,
+    // 不抢焦点：避免切换应用时 blur/focus 导致闪烁与伪标题栏
+    focusable: false,
     show: false,
     backgroundColor: '#00000000',
     webPreferences: {
@@ -207,17 +191,9 @@ function createWindow() {
     applyClickThrough(settings.clickThrough);
     mainWindow.setMenu(null);
     mainWindow.setMenuBarVisibility(false);
-    // 先以透明显示，再强制重绘去掉可能的伪标题栏
-    mainWindow.setOpacity(0.99);
-    mainWindow.show();
+    mainWindow.showInactive();
     mainWindow.setBackgroundColor('#00000000');
-    forceRedrawFrame();
     startCursorTracking();
-    setTimeout(() => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
-      mainWindow.setOpacity(1);
-      forceRedrawFrame();
-    }, 80);
   });
 
   mainWindow.on('show', () => {
@@ -225,14 +201,6 @@ function createWindow() {
   });
   mainWindow.on('hide', () => {
     stopCursorTracking();
-  });
-
-  mainWindow.on('blur', () => {
-    // 失焦时 Windows 常画出蓝色/灰色标题条，立刻重绘抹掉
-    setTimeout(forceRedrawFrame, 0);
-  });
-  mainWindow.on('focus', () => {
-    setTimeout(forceRedrawFrame, 0);
   });
 
   mainWindow.on('closed', () => {
@@ -250,8 +218,7 @@ function createTray() {
     if (mainWindow.isVisible()) {
       mainWindow.hide();
     } else {
-      mainWindow.show();
-      forceRedrawFrame();
+      mainWindow.showInactive();
     }
     tray.setContextMenu(buildTrayMenu());
   });
