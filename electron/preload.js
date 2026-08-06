@@ -39,4 +39,23 @@ contextBridge.exposeInMainWorld('deskpet', {
     ipcRenderer.on('pet:input', handler);
     return () => ipcRenderer.removeListener('pet:input', handler);
   },
+  /**
+   * 订阅托盘「点击穿透」开关
+   * @param {(payload: { enabled: boolean }) => void} callback
+   * @returns {() => void}
+   */
+  onClickThrough: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('pet:click-through', handler);
+    return () => ipcRenderer.removeListener('pet:click-through', handler);
+  },
+  /** @returns {Promise<boolean>} */
+  getClickThrough: () => ipcRenderer.invoke('pet:get-click-through'),
+  /**
+   * 请求主进程切换鼠标穿透（仅在点击穿透关闭时生效）
+   * @param {boolean} ignore
+   */
+  setMouseIgnore: (ignore) => {
+    ipcRenderer.send('pet:mouse-ignore', !!ignore);
+  },
 });

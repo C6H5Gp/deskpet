@@ -244,12 +244,33 @@ function startCursorTracking() {
   }, 33); // ~30fps
 }
 
-function applyClickThrough(enabled) {
+/** 当前是否忽略鼠标（避免重复调用 setIgnoreMouseEvents） */
+let ignoringMouse = null;
+
+/**
+ * 设置鼠标穿透。
+ * Windows 透明窗上 setIgnoreMouseEvents(false) 对全透明像素经常无效，
+ * 关闭「点击穿透」时仍用 forward，由渲染进程在悬停角色时再临时关闭穿透。
+ */
+function setMouseIgnore(ignore) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (enabled) {
+  const next = !!ignore;
+  if (ignoringMouse === next) return;
+  ignoringMouse = next;
+  if (next) {
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
   } else {
     mainWindow.setIgnoreMouseEvents(false);
+  }
+}
+
+function applyClickThrough(enabled) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // 切换模式时强制重设；悬停逻辑由渲染进程接管
+  ignoringMouse = null;
+  setMouseIgnore(true);
+  if (!mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('pet:click-through', { enabled: !!enabled });
   }
 }
 
@@ -386,6 +407,7 @@ function createWindow() {
     fullscreenable: false,
     // 不抢焦点：避免切换应用时 blur/focus 导致闪烁与伪标题栏
     focusable: false,
+    acceptFirstMouse: true,
     show: false,
     backgroundColor: '#00000000',
     webPreferences: {
@@ -458,6 +480,14 @@ function setupIpc() {
     dragState = null;
     persistWindowPosition();
   });
+
+  /** 渲染进程：悬停角色时关闭穿透，离开后恢复（点击穿透开启时忽略） */
+  ipcMain.on('pet:mouse-ignore', (_event, ignore) => {
+    if (!mainWindow || mainWindow.isDestroyed() || settings.clickThrough) return;
+    setMouseIgnore(!!ignore);
+  });
+
+  ipcMain.handle('pet:get-click-through', () => !!settings.clickThrough);
 }
 
 app.whenReady().then(() => {

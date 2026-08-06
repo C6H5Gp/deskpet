@@ -133,6 +133,105 @@
   }
 
   /**
+   * Windows 透明窗：仅在光标悬停角色包围盒时关闭穿透，空白区域保持可点穿。
+   * 依赖主进程光标轮询，不依赖 DOM mousemove。
+   */
+  function setupMouseHit(widget) {
+    const api = window.deskpet;
+    if (!api || !api.onCursor || !api.setMouseIgnore) return;
+
+    let clickThrough = false;
+    let lastIgnore = null;
+    let pointerDown = false;
+    // 包围盒略收缩，减少透明边角误捕获
+    const PAD = 8;
+
+    const endPointer = () => {
+      pointerDown = false;
+    };
+    window.addEventListener('pointerdown', () => {
+      pointerDown = true;
+    }, true);
+    window.addEventListener('pointerup', endPointer, true);
+    window.addEventListener('pointercancel', endPointer, true);
+
+    if (api.getClickThrough) {
+      api.getClickThrough().then((enabled) => {
+        clickThrough = !!enabled;
+        lastIgnore = null;
+        if (clickThrough) {
+          api.setMouseIgnore(true);
+          lastIgnore = true;
+        }
+      });
+    }
+
+    if (api.onClickThrough) {
+      api.onClickThrough((payload) => {
+        clickThrough = !!(payload && payload.enabled);
+        lastIgnore = null;
+        if (clickThrough) {
+          api.setMouseIgnore(true);
+          lastIgnore = true;
+        }
+      });
+    }
+
+    api.onCursor((payload) => {
+      if (clickThrough) {
+        if (lastIgnore !== true) {
+          api.setMouseIgnore(true);
+          lastIgnore = true;
+        }
+        return;
+      }
+
+      // 拖动中保持捕获，避免移出包围盒后突然穿透导致拖不动
+      if (pointerDown) {
+        if (lastIgnore !== false) {
+          api.setMouseIgnore(false);
+          lastIgnore = false;
+        }
+        return;
+      }
+
+      const model = widget && widget.model;
+      if (!model || typeof model.getBounds !== 'function') return;
+
+      const lx = payload.x - payload.winX;
+      const ly = payload.y - payload.winY;
+      if (
+        lx < 0 ||
+        ly < 0 ||
+        lx > payload.winW ||
+        ly > payload.winH
+      ) {
+        if (lastIgnore !== true) {
+          api.setMouseIgnore(true);
+          lastIgnore = true;
+        }
+        return;
+      }
+
+      const bounds = model.getBounds(true);
+      const over =
+        bounds &&
+        bounds.width > 0 &&
+        bounds.height > 0 &&
+        lx >= bounds.x + PAD &&
+        lx <= bounds.x + bounds.width - PAD &&
+        ly >= bounds.y + PAD &&
+        ly <= bounds.y + bounds.height - PAD;
+
+      const ignore = !over;
+      if (ignore !== lastIgnore) {
+        api.setMouseIgnore(ignore);
+        lastIgnore = ignore;
+      }
+    });
+  }
+
+  /**
    * 在动作组中按名称片段查找索引
    * @param {Record<string, Array<{ Name?: string }>>} groups
    * @param {string} group
@@ -258,6 +357,7 @@
         });
         setupWindowDrag();
         setupScreenTracking(widget);
+        setupMouseHit(widget);
         setupInputReaction(widget);
         window.__deskpetWidget = widget;
       })
