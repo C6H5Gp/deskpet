@@ -1,17 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('deskpet', {
-  /** 开始拖动窗口（传入按下时相对窗口的偏移） */
-  startDrag: (offsetX, offsetY) => {
-    ipcRenderer.send('pet:start-drag', { offsetX, offsetY });
-  },
-  /** 拖动中更新窗口位置 */
-  dragMove: () => {
-    ipcRenderer.send('pet:drag-move');
-  },
-  /** 结束拖动 */
-  endDrag: () => {
-    ipcRenderer.send('pet:end-drag');
+  /**
+   * 上报角色命中包围盒（窗口客户区坐标）
+   * @param {{ x:number, y:number, width:number, height:number }} bounds
+   */
+  setHitBounds: (bounds) => {
+    ipcRenderer.send('pet:hit-bounds', bounds);
   },
   /**
    * 订阅全屏光标位置（主进程轮询，穿透时也能跟踪）
@@ -51,11 +46,4 @@ contextBridge.exposeInMainWorld('deskpet', {
   },
   /** @returns {Promise<boolean>} */
   getClickThrough: () => ipcRenderer.invoke('pet:get-click-through'),
-  /**
-   * 请求主进程切换鼠标穿透（仅在点击穿透关闭时生效）
-   * @param {boolean} ignore
-   */
-  setMouseIgnore: (ignore) => {
-    ipcRenderer.send('pet:mouse-ignore', !!ignore);
-  },
 });

@@ -2,7 +2,6 @@
  * Electron 桌宠初始化：按包围盒自动居中缩放，避免偏位与裁切
  */
 (function () {
-  const DRAG_THRESHOLD = 5;
   const FIT_PADDING = 24;
 
   function fillContainer() {
@@ -48,58 +47,26 @@
     model.y += screenH / 2 - (bounds2.y + bounds2.height / 2);
   }
 
-  function setupWindowDrag() {
+  /**
+   * 向主进程上报角色命中区（拖动 / 动态穿透都用它）
+   */
+  function reportHitBounds(widget) {
     const api = window.deskpet;
-    if (!api) return;
+    if (!api || !api.setHitBounds) return;
+    const model = widget && widget.model;
+    if (!model || typeof model.getBounds !== 'function') return;
 
-    let dragging = false;
-    let moved = false;
-    let startX = 0;
-    let startY = 0;
+    const bounds = model.getBounds(true);
+    if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return;
 
-    const onMove = (e) => {
-      if (!dragging) return;
-      const dx = Math.abs(e.screenX - startX);
-      const dy = Math.abs(e.screenY - startY);
-      if (!moved && (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD)) {
-        moved = true;
-      }
-      if (moved) {
-        api.dragMove();
-      }
-    };
-
-    const onUp = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      api.endDrag();
-      window.removeEventListener('pointermove', onMove, true);
-      window.removeEventListener('pointerup', onUp, true);
-      window.removeEventListener('pointercancel', onUp, true);
-      if (moved) {
-        e.stopImmediatePropagation();
-      }
-    };
-
-    document.addEventListener(
-      'pointerdown',
-      (e) => {
-        const canvas = document.getElementById('live2d-widget-canvas');
-        if (!canvas) return;
-        if (e.target !== canvas && !canvas.contains(e.target)) return;
-        if (e.button !== 0) return;
-
-        dragging = true;
-        moved = false;
-        startX = e.screenX;
-        startY = e.screenY;
-        api.startDrag(e.clientX, e.clientY);
-        window.addEventListener('pointermove', onMove, true);
-        window.addEventListener('pointerup', onUp, true);
-        window.addEventListener('pointercancel', onUp, true);
-      },
-      true
-    );
+    // 略收缩，减少透明边角误捕获
+    const PAD = 8;
+    api.setHitBounds({
+      x: bounds.x + PAD,
+      y: bounds.y + PAD,
+      width: Math.max(0, bounds.width - PAD * 2),
+      height: Math.max(0, bounds.height - PAD * 2),
+    });
   }
 
   /**
@@ -110,7 +77,14 @@
     const api = window.deskpet;
     if (!api || !api.onCursor) return;
 
+    let boundsTick = 0;
     api.onCursor((payload) => {
+      // 动作会微变包围盒，隔几帧同步一次即可
+      if (boundsTick % 6 === 0) {
+        reportHitBounds(widget);
+      }
+      boundsTick += 1;
+
       const model = widget && widget.model;
       const focus =
         model &&
@@ -129,105 +103,6 @@
       fy = Math.max(-1, Math.min(1, fy));
       // Live2D 垂直方向与屏幕相反
       focus.focus(fx, -fy);
-    });
-  }
-
-  /**
-   * Windows 透明窗：仅在光标悬停角色包围盒时关闭穿透，空白区域保持可点穿。
-   * 依赖主进程光标轮询，不依赖 DOM mousemove。
-   */
-  function setupMouseHit(widget) {
-    const api = window.deskpet;
-    if (!api || !api.onCursor || !api.setMouseIgnore) return;
-
-    let clickThrough = false;
-    let lastIgnore = null;
-    let pointerDown = false;
-    // 包围盒略收缩，减少透明边角误捕获
-    const PAD = 8;
-
-    const endPointer = () => {
-      pointerDown = false;
-    };
-    window.addEventListener('pointerdown', () => {
-      pointerDown = true;
-    }, true);
-    window.addEventListener('pointerup', endPointer, true);
-    window.addEventListener('pointercancel', endPointer, true);
-
-    if (api.getClickThrough) {
-      api.getClickThrough().then((enabled) => {
-        clickThrough = !!enabled;
-        lastIgnore = null;
-        if (clickThrough) {
-          api.setMouseIgnore(true);
-          lastIgnore = true;
-        }
-      });
-    }
-
-    if (api.onClickThrough) {
-      api.onClickThrough((payload) => {
-        clickThrough = !!(payload && payload.enabled);
-        lastIgnore = null;
-        if (clickThrough) {
-          api.setMouseIgnore(true);
-          lastIgnore = true;
-        }
-      });
-    }
-
-    api.onCursor((payload) => {
-      if (clickThrough) {
-        if (lastIgnore !== true) {
-          api.setMouseIgnore(true);
-          lastIgnore = true;
-        }
-        return;
-      }
-
-      // 拖动中保持捕获，避免移出包围盒后突然穿透导致拖不动
-      if (pointerDown) {
-        if (lastIgnore !== false) {
-          api.setMouseIgnore(false);
-          lastIgnore = false;
-        }
-        return;
-      }
-
-      const model = widget && widget.model;
-      if (!model || typeof model.getBounds !== 'function') return;
-
-      const lx = payload.x - payload.winX;
-      const ly = payload.y - payload.winY;
-      if (
-        lx < 0 ||
-        ly < 0 ||
-        lx > payload.winW ||
-        ly > payload.winH
-      ) {
-        if (lastIgnore !== true) {
-          api.setMouseIgnore(true);
-          lastIgnore = true;
-        }
-        return;
-      }
-
-      const bounds = model.getBounds(true);
-      const over =
-        bounds &&
-        bounds.width > 0 &&
-        bounds.height > 0 &&
-        lx >= bounds.x + PAD &&
-        lx <= bounds.x + bounds.width - PAD &&
-        ly >= bounds.y + PAD &&
-        ly <= bounds.y + bounds.height - PAD;
-
-      const ignore = !over;
-      if (ignore !== lastIgnore) {
-        api.setMouseIgnore(ignore);
-        lastIgnore = ignore;
-      }
     });
   }
 
@@ -353,11 +228,13 @@
         // 等一帧再测量，确保纹理与 bounds 就绪
         requestAnimationFrame(() => {
           fitModelToView(widget);
-          requestAnimationFrame(() => fitModelToView(widget));
+          reportHitBounds(widget);
+          requestAnimationFrame(() => {
+            fitModelToView(widget);
+            reportHitBounds(widget);
+          });
         });
-        setupWindowDrag();
         setupScreenTracking(widget);
-        setupMouseHit(widget);
         setupInputReaction(widget);
         window.__deskpetWidget = widget;
       })

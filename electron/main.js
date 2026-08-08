@@ -26,11 +26,23 @@ let tray = null;
 /** 拖窗状态 */
 let dragState = null;
 
+/**
+ * 角色命中区（窗口客户区坐标，由渲染进程上报）
+ * @type {{ x: number, y: number, width: number, height: number } | null}
+ */
+let hitBounds = null;
+
 /** 全屏光标跟踪定时器 */
 let cursorTrackTimer = null;
 
 /** 全局键鼠轮询定时器 */
 let inputTrackTimer = null;
+
+/** 主进程拖动轮询 */
+let dragTrackTimer = null;
+
+/** 上一轮左键是否按下（用于拖动边沿检测） */
+let dragLeftWasDown = false;
 
 /** @type {((vk: number) => number) | null} */
 let getAsyncKeyState = null;
@@ -96,23 +108,48 @@ let settings = {
   windowY: null,
 };
 
+/**
+ * 将窗口坐标夹紧到最近显示器工作区内，避免右下角「露出去」一块
+ */
+function clampToWorkArea(x, y) {
+  const cx = x + WIN_W / 2;
+  const cy = y + WIN_H / 2;
+  const display = screen.getDisplayNearestPoint({
+    x: Math.round(cx),
+    y: Math.round(cy),
+  });
+  const area = display.workArea;
+  const minX = area.x;
+  const minY = area.y;
+  const maxX = area.x + area.width - WIN_W;
+  const maxY = area.y + area.height - WIN_H;
+  return {
+    x: Math.round(Math.max(minX, Math.min(x, Math.max(minX, maxX)))),
+    y: Math.round(Math.max(minY, Math.min(y, Math.max(minY, maxY)))),
+  };
+}
+
 /** 保存当前窗口位置 */
 function persistWindowPosition() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const [x, y] = mainWindow.getPosition();
-  saveSettings({ windowX: x, windowY: y });
+  const clamped = clampToWorkArea(x, y);
+  if (clamped.x !== x || clamped.y !== y) {
+    mainWindow.setPosition(clamped.x, clamped.y);
+  }
+  saveSettings({ windowX: clamped.x, windowY: clamped.y });
 }
 
 /**
- * 解析初始坐标：优先用上次位置（需仍落在某块屏幕上），否则右下角
+ * 解析初始坐标：优先用上次位置（夹紧到工作区），否则右下角
  */
 function resolveWindowPosition() {
   const fallback = () => {
     const { workArea } = screen.getPrimaryDisplay();
-    return {
-      x: Math.round(workArea.x + workArea.width - WIN_W - 16),
-      y: Math.round(workArea.y + workArea.height - WIN_H - 16),
-    };
+    return clampToWorkArea(
+      workArea.x + workArea.width - WIN_W - 16,
+      workArea.y + workArea.height - WIN_H - 16
+    );
   };
 
   const sx = settings.windowX;
@@ -121,7 +158,7 @@ function resolveWindowPosition() {
     return fallback();
   }
 
-  // 窗口中心点仍在某显示器工作区内才恢复，避免换分辨率后飞出屏幕
+  // 窗口中心点仍在某显示器工作区内才恢复，否则回右下角
   const cx = sx + WIN_W / 2;
   const cy = sy + WIN_H / 2;
   const display = screen.getDisplayNearestPoint({ x: Math.round(cx), y: Math.round(cy) });
@@ -133,7 +170,39 @@ function resolveWindowPosition() {
     cy <= area.y + area.height;
 
   if (!visible) return fallback();
-  return { x: Math.round(sx), y: Math.round(sy) };
+  return clampToWorkArea(sx, sy);
+}
+
+/** 有效命中区；尚未上报时用窗口中心区域兜底 */
+function getEffectiveHitBounds() {
+  if (
+    hitBounds &&
+    hitBounds.width > 32 &&
+    hitBounds.height > 32
+  ) {
+    return hitBounds;
+  }
+  return {
+    x: Math.round(WIN_W * 0.2),
+    y: Math.round(WIN_H * 0.1),
+    width: Math.round(WIN_W * 0.6),
+    height: Math.round(WIN_H * 0.8),
+  };
+}
+
+function isCursorOverHit(cursor) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const b = mainWindow.getBounds();
+  const lx = cursor.x - b.x;
+  const ly = cursor.y - b.y;
+  if (lx < 0 || ly < 0 || lx > b.width || ly > b.height) return false;
+  const hit = getEffectiveHitBounds();
+  return (
+    lx >= hit.x &&
+    lx <= hit.x + hit.width &&
+    ly >= hit.y &&
+    ly <= hit.y + hit.height
+  );
 }
 
 function stopCursorTracking() {
@@ -241,7 +310,90 @@ function startCursorTracking() {
       screenW: area.width,
       screenH: area.height,
     });
+
+    // 点击穿透关闭时：按命中区动态开关穿透（不依赖透明像素能否点中）
+    if (!settings.clickThrough && !dragState) {
+      setMouseIgnore(!isCursorOverHit(cursor));
+    }
   }, 33); // ~30fps
+}
+
+function stopDragTracking() {
+  if (dragTrackTimer) {
+    clearInterval(dragTrackTimer);
+    dragTrackTimer = null;
+  }
+  dragLeftWasDown = false;
+  dragState = null;
+}
+
+/**
+ * 主进程拖动：用全局左键 + 命中区移动窗口。
+ * Windows 透明窗即使 setIgnoreMouseEvents(false)，透明像素也常收不到 DOM 事件，
+ * 因此不能只靠渲染进程 pointerdown。
+ */
+function startDragTracking() {
+  stopDragTracking();
+  if (!initKeyApi() || !getAsyncKeyState) return;
+
+  const DRAG_THRESHOLD = 5;
+
+  dragTrackTimer = setInterval(() => {
+    if (!petVisible || !mainWindow || mainWindow.isDestroyed()) {
+      dragState = null;
+      dragLeftWasDown = false;
+      return;
+    }
+
+    const leftDown = (getAsyncKeyState(VK_LBUTTON) & 0x8000) !== 0;
+    const cursor = screen.getCursorScreenPoint();
+
+    if (dragState) {
+      if (!leftDown) {
+        dragState = null;
+        persistWindowPosition();
+        // 松手后按当前位置恢复穿透策略
+        if (!settings.clickThrough) {
+          setMouseIgnore(!isCursorOverHit(cursor));
+        }
+      } else {
+        const dx = Math.abs(cursor.x - dragState.startX);
+        const dy = Math.abs(cursor.y - dragState.startY);
+        if (!dragState.moved && (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD)) {
+          dragState.moved = true;
+        }
+        if (dragState.moved) {
+          const next = clampToWorkArea(
+            cursor.x - dragState.offsetX,
+            cursor.y - dragState.offsetY
+          );
+          mainWindow.setPosition(next.x, next.y);
+        }
+      }
+      dragLeftWasDown = leftDown;
+      return;
+    }
+
+    // 点击穿透开启时不拖；关闭时在角色命中区按下左键开始拖
+    if (
+      !settings.clickThrough &&
+      leftDown &&
+      !dragLeftWasDown &&
+      isCursorOverHit(cursor)
+    ) {
+      const bounds = mainWindow.getBounds();
+      dragState = {
+        offsetX: cursor.x - bounds.x,
+        offsetY: cursor.y - bounds.y,
+        startX: cursor.x,
+        startY: cursor.y,
+        moved: false,
+      };
+      setMouseIgnore(false);
+    }
+
+    dragLeftWasDown = leftDown;
+  }, 16);
 }
 
 /** 当前是否忽略鼠标（避免重复调用 setIgnoreMouseEvents） */
@@ -249,8 +401,8 @@ let ignoringMouse = null;
 
 /**
  * 设置鼠标穿透。
- * Windows 透明窗上 setIgnoreMouseEvents(false) 对全透明像素经常无效，
- * 关闭「点击穿透」时仍用 forward，由渲染进程在悬停角色时再临时关闭穿透。
+ * 关闭「点击穿透」时：未命中角色用 forward 穿透，命中角色时关闭穿透；
+ * 拖动本身由主进程全局左键轮询完成，不依赖透明像素能否收到 DOM 事件。
  */
 function setMouseIgnore(ignore) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -266,9 +418,15 @@ function setMouseIgnore(ignore) {
 
 function applyClickThrough(enabled) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  // 切换模式时强制重设；悬停逻辑由渲染进程接管
+  // 切换模式时强制重设；关闭穿透时由光标轮询按命中区接管
   ignoringMouse = null;
-  setMouseIgnore(true);
+  dragState = null;
+  if (enabled) {
+    setMouseIgnore(true);
+  } else {
+    const cursor = screen.getCursorScreenPoint();
+    setMouseIgnore(!isCursorOverHit(cursor));
+  }
   if (!mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('pet:click-through', { enabled: !!enabled });
   }
@@ -292,6 +450,7 @@ function showMainWindow() {
   applyClickThrough(settings.clickThrough);
   startCursorTracking();
   startInputTracking();
+  startDragTracking();
 }
 
 function hideMainWindow() {
@@ -300,6 +459,7 @@ function hideMainWindow() {
   mainWindow.hide();
   stopCursorTracking();
   stopInputTracking();
+  stopDragTracking();
 }
 
 function toggleMainWindow() {
@@ -433,13 +593,14 @@ function createWindow() {
   });
 
   mainWindow.on('moved', () => {
-    // 拖动过程中也会触发；结束拖动时再写一次更稳妥，这里做轻量节流
+    // 主进程拖动中由 drag 轮询写回；其它移动（如系统）在此保存
     if (!dragState) persistWindowPosition();
   });
 
   mainWindow.on('closed', () => {
     stopCursorTracking();
     stopInputTracking();
+    stopDragTracking();
     mainWindow = null;
   });
 }
@@ -457,34 +618,23 @@ function createTray() {
 }
 
 function setupIpc() {
-  ipcMain.on('pet:start-drag', (_event, { offsetX, offsetY }) => {
-    if (!mainWindow || mainWindow.isDestroyed() || settings.clickThrough) return;
-    const bounds = mainWindow.getBounds();
-    const cursor = screen.getCursorScreenPoint();
-    dragState = {
-      offsetX: typeof offsetX === 'number' ? offsetX : cursor.x - bounds.x,
-      offsetY: typeof offsetY === 'number' ? offsetY : cursor.y - bounds.y,
+  /** 渲染进程上报角色包围盒（窗口客户区坐标） */
+  ipcMain.on('pet:hit-bounds', (_event, bounds) => {
+    if (
+      !bounds ||
+      typeof bounds.x !== 'number' ||
+      typeof bounds.y !== 'number' ||
+      typeof bounds.width !== 'number' ||
+      typeof bounds.height !== 'number'
+    ) {
+      return;
+    }
+    hitBounds = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
     };
-  });
-
-  ipcMain.on('pet:drag-move', () => {
-    if (!mainWindow || mainWindow.isDestroyed() || !dragState) return;
-    const cursor = screen.getCursorScreenPoint();
-    mainWindow.setPosition(
-      Math.round(cursor.x - dragState.offsetX),
-      Math.round(cursor.y - dragState.offsetY)
-    );
-  });
-
-  ipcMain.on('pet:end-drag', () => {
-    dragState = null;
-    persistWindowPosition();
-  });
-
-  /** 渲染进程：悬停角色时关闭穿透，离开后恢复（点击穿透开启时忽略） */
-  ipcMain.on('pet:mouse-ignore', (_event, ignore) => {
-    if (!mainWindow || mainWindow.isDestroyed() || settings.clickThrough) return;
-    setMouseIgnore(!!ignore);
   });
 
   ipcMain.handle('pet:get-click-through', () => !!settings.clickThrough);
@@ -512,6 +662,7 @@ app.on('before-quit', () => {
   persistWindowPosition();
   stopCursorTracking();
   stopInputTracking();
+  stopDragTracking();
   if (tray) {
     tray.destroy();
     tray = null;
