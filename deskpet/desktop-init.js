@@ -1,8 +1,8 @@
 /**
- * Electron 桌宠初始化：按包围盒自动居中缩放，避免偏位与裁切
+ * Electron 桌宠初始化：按包围盒缩放并贴齐窗口右下，避免角色往中间缩
  */
 (function () {
-  const FIT_PADDING = 24;
+  const FIT_PADDING = 16;
 
   function fillContainer() {
     const container = document.getElementById('live2d-widget-container');
@@ -18,7 +18,7 @@
   }
 
   /**
-   * 按模型实际包围盒缩放并居中，消除锚点偏移导致的裁切
+   * 按模型实际包围盒缩放，并贴齐窗口右下角（透明余量留在左上，便于探出屏幕贴齐桌面右下）
    */
   function fitModelToView(widget) {
     const model = widget && widget.model;
@@ -43,8 +43,9 @@
     model.scale.set(scale);
 
     const bounds2 = model.getBounds(true);
-    model.x += screenW / 2 - (bounds2.x + bounds2.width / 2);
-    model.y += screenH / 2 - (bounds2.y + bounds2.height / 2);
+    // 右下对齐，而不是居中（居中会让角色相对桌面「往中间缩」）
+    model.x += screenW - pad - (bounds2.x + bounds2.width);
+    model.y += screenH - pad - (bounds2.y + bounds2.height);
   }
 
   /**

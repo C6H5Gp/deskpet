@@ -108,48 +108,23 @@ let settings = {
   windowY: null,
 };
 
-/**
- * 将窗口坐标夹紧到最近显示器工作区内，避免右下角「露出去」一块
- */
-function clampToWorkArea(x, y) {
-  const cx = x + WIN_W / 2;
-  const cy = y + WIN_H / 2;
-  const display = screen.getDisplayNearestPoint({
-    x: Math.round(cx),
-    y: Math.round(cy),
-  });
-  const area = display.workArea;
-  const minX = area.x;
-  const minY = area.y;
-  const maxX = area.x + area.width - WIN_W;
-  const maxY = area.y + area.height - WIN_H;
-  return {
-    x: Math.round(Math.max(minX, Math.min(x, Math.max(minX, maxX)))),
-    y: Math.round(Math.max(minY, Math.min(y, Math.max(minY, maxY)))),
-  };
-}
-
-/** 保存当前窗口位置 */
+/** 保存当前窗口位置（允许探出屏幕：角色未铺满窗口时需靠探出贴齐右下角） */
 function persistWindowPosition() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const [x, y] = mainWindow.getPosition();
-  const clamped = clampToWorkArea(x, y);
-  if (clamped.x !== x || clamped.y !== y) {
-    mainWindow.setPosition(clamped.x, clamped.y);
-  }
-  saveSettings({ windowX: clamped.x, windowY: clamped.y });
+  saveSettings({ windowX: x, windowY: y });
 }
 
 /**
- * 解析初始坐标：优先用上次位置（夹紧到工作区），否则右下角
+ * 解析初始坐标：优先用上次位置（中心仍在某屏上即可，允许探出），否则右下角
  */
 function resolveWindowPosition() {
   const fallback = () => {
     const { workArea } = screen.getPrimaryDisplay();
-    return clampToWorkArea(
-      workArea.x + workArea.width - WIN_W - 16,
-      workArea.y + workArea.height - WIN_H - 16
-    );
+    return {
+      x: Math.round(workArea.x + workArea.width - WIN_W - 16),
+      y: Math.round(workArea.y + workArea.height - WIN_H - 16),
+    };
   };
 
   const sx = settings.windowX;
@@ -158,7 +133,7 @@ function resolveWindowPosition() {
     return fallback();
   }
 
-  // 窗口中心点仍在某显示器工作区内才恢复，否则回右下角
+  // 窗口中心点仍在某显示器工作区内才恢复，避免换分辨率后完全丢失
   const cx = sx + WIN_W / 2;
   const cy = sy + WIN_H / 2;
   const display = screen.getDisplayNearestPoint({ x: Math.round(cx), y: Math.round(cy) });
@@ -170,7 +145,7 @@ function resolveWindowPosition() {
     cy <= area.y + area.height;
 
   if (!visible) return fallback();
-  return clampToWorkArea(sx, sy);
+  return { x: Math.round(sx), y: Math.round(sy) };
 }
 
 /** 有效命中区；尚未上报时用窗口中心区域兜底 */
@@ -363,11 +338,10 @@ function startDragTracking() {
           dragState.moved = true;
         }
         if (dragState.moved) {
-          const next = clampToWorkArea(
-            cursor.x - dragState.offsetX,
-            cursor.y - dragState.offsetY
+          mainWindow.setPosition(
+            Math.round(cursor.x - dragState.offsetX),
+            Math.round(cursor.y - dragState.offsetY)
           );
-          mainWindow.setPosition(next.x, next.y);
         }
       }
       dragLeftWasDown = leftDown;
