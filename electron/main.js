@@ -6,6 +6,7 @@ const {
   nativeImage,
   screen,
   ipcMain,
+  powerMonitor,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -49,6 +50,13 @@ let getAsyncKeyState = null;
 
 /** 上一轮按键按下状态（vk → boolean） */
 const keyDownPrev = new Map();
+
+/** 可见性看门狗：对抗 Win+D / DWM 透明合成「假消失」 */
+let visibilityWatchTimer = null;
+/** 意外 hide 后的延迟恢复句柄 */
+let recoverHideTimer = null;
+/** 正在 hide/show 重建表面，避免 hide 事件递归 */
+let recoveringSurface = false;
 
 /** 纯修饰键，不触发桌宠动作 */
 const KEY_IGNORE = new Set([
@@ -407,6 +415,82 @@ function applyClickThrough(enabled) {
 }
 
 /**
+ * 在用户期望显示时，强制恢复透明窗表面。
+ * Windows 上 transparent 窗可能仍 isVisible，但 DWM 丢绘；hide→show 与托盘「隐藏再显示」同理可重建。
+ */
+function ensureMainWindowShown(forceCycle = false) {
+  if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
+  if (recoveringSurface) return;
+  recoveringSurface = true;
+
+  const finish = () => {
+    if (!petVisible || !mainWindow || mainWindow.isDestroyed()) {
+      recoveringSurface = false;
+      return;
+    }
+    try {
+      mainWindow.setOpacity(1);
+    } catch {
+      // 忽略
+    }
+    mainWindow.show();
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.setBackgroundColor('#00000000');
+    applyClickThrough(settings.clickThrough);
+    recoveringSurface = false;
+  };
+
+  try {
+    if (forceCycle) {
+      mainWindow.hide();
+      setTimeout(finish, 40);
+      return;
+    }
+    finish();
+  } catch (err) {
+    recoveringSurface = false;
+    console.error('恢复桌宠窗口失败:', err);
+  }
+}
+
+function stopVisibilityWatch() {
+  if (visibilityWatchTimer) {
+    clearInterval(visibilityWatchTimer);
+    visibilityWatchTimer = null;
+  }
+  if (recoverHideTimer) {
+    clearTimeout(recoverHideTimer);
+    recoverHideTimer = null;
+  }
+}
+
+function startVisibilityWatch() {
+  stopVisibilityWatch();
+  visibilityWatchTimer = setInterval(() => {
+    if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
+    if (recoveringSurface) return;
+    let visible = false;
+    try {
+      visible = mainWindow.isVisible();
+    } catch {
+      return;
+    }
+    if (!visible) {
+      // 系统藏窗或 Electron 可见性脱节 → 用 hide/show 重建（等同托盘隐藏再显示）
+      ensureMainWindowShown(true);
+      return;
+    }
+    // 仍可见时定期重申置顶与不透明，缓解透明层偶发丢绘
+    try {
+      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      mainWindow.setOpacity(1);
+    } catch {
+      // 忽略
+    }
+  }, 2000);
+}
+
+/**
  * 显示桌宠窗口。
  * Windows 上 transparent + focusable:false 时 showInactive() 经常无效，需用 show() 兜底并重申置顶。
  */
@@ -425,11 +509,13 @@ function showMainWindow() {
   startCursorTracking();
   startInputTracking();
   startDragTracking();
+  startVisibilityWatch();
 }
 
 function hideMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   petVisible = false;
+  stopVisibilityWatch();
   mainWindow.hide();
   stopCursorTracking();
   stopInputTracking();
@@ -566,12 +652,23 @@ function createWindow() {
     showMainWindow();
   });
 
+  // 系统「显示桌面」等会直接 hide，此时 petVisible 仍为 true → 自动拉回
+  mainWindow.on('hide', () => {
+    if (!petVisible || recoveringSurface) return;
+    if (recoverHideTimer) clearTimeout(recoverHideTimer);
+    recoverHideTimer = setTimeout(() => {
+      recoverHideTimer = null;
+      if (petVisible) ensureMainWindowShown(true);
+    }, 80);
+  });
+
   mainWindow.on('moved', () => {
     // 主进程拖动中由 drag 轮询写回；其它移动（如系统）在此保存
     if (!dragState) persistWindowPosition();
   });
 
   mainWindow.on('closed', () => {
+    stopVisibilityWatch();
     stopCursorTracking();
     stopInputTracking();
     stopDragTracking();
@@ -623,6 +720,16 @@ app.whenReady().then(() => {
   }
   applyOpenAtLogin(settings.openAtLogin);
   setupIpc();
+
+  // 休眠唤醒 / 解锁 / 分辨率变化后，透明层常丢绘，主动重建
+  const recoverAfterSystemChange = () => {
+    if (!petVisible) return;
+    setTimeout(() => ensureMainWindowShown(true), 120);
+  };
+  powerMonitor.on('resume', recoverAfterSystemChange);
+  powerMonitor.on('unlock-screen', recoverAfterSystemChange);
+  screen.on('display-metrics-changed', recoverAfterSystemChange);
+
   // 稍延迟创建，让 transparent visuals 就绪
   setTimeout(() => {
     createWindow();
@@ -634,6 +741,7 @@ app.on('window-all-closed', () => {});
 
 app.on('before-quit', () => {
   persistWindowPosition();
+  stopVisibilityWatch();
   stopCursorTracking();
   stopInputTracking();
   stopDragTracking();
