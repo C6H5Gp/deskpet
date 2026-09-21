@@ -1,0 +1,57 @@
+﻿# 桌宠 (deskpet)
+
+Windows 桌面 Live2D 桌宠 —— Electron 透明置顶窗口，支持点击穿透、拖动与系统托盘。
+
+## 功能
+
+- Live2D 角色桌宠（透明窗 + 置顶）
+- **点击穿透**：开启后整窗（含本体）鼠标穿透到下层；关闭后可正常点击/拖动
+- 右键菜单 / 托盘控制
+- 支持打包安装版与便携版（electron-builder）
+
+## 环境
+
+- Windows 10/11 x64
+- Node.js 18+（建议 20/22）
+
+## 开发运行
+
+```bash
+npm install
+npm start
+```
+
+仅预览静态页：
+
+```bash
+npm run web
+```
+
+## 打包
+
+```bash
+npm run dist        # 安装包 + 便携版 → dist/
+npm run dist:dir    # 未打包目录，便于本机热替换 asar
+```
+
+## 目录
+
+| 路径 | 说明 |
+|------|------|
+| `electron/` | Electron 主进程 / preload |
+| `deskpet/` | 渲染与桌宠逻辑 |
+| `docs/` | 进度与说明 |
+| `build/` | 打包资源 |
+
+## 点击穿透说明
+
+| 模式 | 行为 |
+|------|------|
+| 开启穿透 | 整窗含本体均穿透，不能点不能拖 |
+| 关闭穿透 | 正常点击与拖动 |
+
+安装版资源在 `Local\Programs\deskpet\resources\app.asar`；开发时改源码后需重新 `dist` 或覆盖 asar 才进安装目录。
+
+## License
+
+Private / personal project unless otherwise noted.

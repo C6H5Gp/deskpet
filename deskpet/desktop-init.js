@@ -20,55 +20,115 @@
   /**
    * 按模型实际包围盒缩放，并贴齐窗口右下角（透明余量留在左上，便于探出屏幕贴齐桌面右下）
    */
+  /**
+   * 按模型实际包围盒缩放，并保证整只落在窗口内（右下对齐，禁止飞出窗外）。
+   */
+  /**
+   * 按模型包围盒缩放到窗口内，右下对齐。不要改 anchor（会把 Live2D 变换搞飞）。
+   */
   function fitModelToView(widget) {
     const model = widget && widget.model;
     const app = widget && widget.app;
-    if (!model || !app) return;
+    if (!model || !app) return false;
 
     const screenW = app.screen.width;
     const screenH = app.screen.height;
     const pad = FIT_PADDING;
+    if (!(screenW > 0) || !(screenH > 0)) return false;
 
-    model.anchor.set(0.5, 0.5);
+    // 用原始像素尺寸估缩放，避免错误 anchor / 脏 bounds
+    let baseW = 0;
+    let baseH = 0;
+    try {
+      if (model.internalModel && model.internalModel.width && model.internalModel.height) {
+        baseW = model.internalModel.width;
+        baseH = model.internalModel.height;
+      }
+    } catch (e) {
+      // ignore
+    }
+
     model.scale.set(1);
-    model.position.set(screenW / 2, screenH / 2);
-
-    const bounds1 = model.getBounds(true);
-    if (!bounds1.width || !bounds1.height) return;
+    try {
+      if (typeof model.updateTransform === 'function') model.updateTransform();
+    } catch (e) {
+      // ignore
+    }
+    let b = model.getBounds(true);
+    if (!(baseW > 1) || !(baseH > 1)) {
+      if (!b || !(b.width > 1) || !(b.height > 1)) return false;
+      baseW = b.width;
+      baseH = b.height;
+    }
 
     const scale = Math.min(
-      (screenW - pad * 2) / bounds1.width,
-      (screenH - pad * 2) / bounds1.height
+      (screenW - pad * 2) / baseW,
+      (screenH - pad * 2) / baseH,
+      1
     );
+    if (!(scale > 0) || !Number.isFinite(scale)) return false;
     model.scale.set(scale);
 
-    const bounds2 = model.getBounds(true);
-    // 右下对齐，而不是居中（居中会让角色相对桌面「往中间缩」）
-    model.x += screenW - pad - (bounds2.x + bounds2.width);
-    model.y += screenH - pad - (bounds2.y + bounds2.height);
+    try {
+      if (typeof model.updateTransform === 'function') model.updateTransform();
+    } catch (e) {
+      // ignore
+    }
+    b = model.getBounds(true);
+    if (!b || !(b.width > 1) || !(b.height > 1)) return false;
+
+    // 先居中，再推到右下，最后夹紧
+    model.position.set(
+      model.position.x + (screenW / 2 - (b.x + b.width / 2)),
+      model.position.y + (screenH / 2 - (b.y + b.height / 2))
+    );
+    try {
+      if (typeof model.updateTransform === 'function') model.updateTransform();
+    } catch (e) {
+      // ignore
+    }
+    b = model.getBounds(true);
+    model.position.set(
+      model.position.x + ((screenW - pad) - (b.x + b.width)),
+      model.position.y + ((screenH - pad) - (b.y + b.height))
+    );
+    try {
+      if (typeof model.updateTransform === 'function') model.updateTransform();
+    } catch (e) {
+      // ignore
+    }
+    b = model.getBounds(true);
+    let dx = 0;
+    let dy = 0;
+    if (b.x < pad) dx += pad - b.x;
+    if (b.y < pad) dy += pad - b.y;
+    if (b.x + dx + b.width > screenW - pad) dx -= b.x + dx + b.width - (screenW - pad);
+    if (b.y + dy + b.height > screenH - pad) dy -= b.y + dy + b.height - (screenH - pad);
+    if (dx || dy) {
+      model.position.set(model.position.x + dx, model.position.y + dy);
+    }
+
+    try {
+      if (app.renderer && app.stage) app.renderer.render(app.stage);
+    } catch (e) {
+      // ignore
+    }
+    return true;
   }
 
-  /**
-   * 向主进程上报角色命中区（拖动 / 动态穿透都用它）
-   */
-  function reportHitBounds(widget) {
-    const api = window.deskpet;
-    if (!api || !api.setHitBounds) return;
-    const model = widget && widget.model;
-    if (!model || typeof model.getBounds !== 'function') return;
-
-    const bounds = model.getBounds(true);
-    if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return;
-
-    // 略收缩，减少透明边角误捕获
-    const PAD = 8;
-    api.setHitBounds({
-      x: bounds.x + PAD,
-      y: bounds.y + PAD,
-      width: Math.max(0, bounds.width - PAD * 2),
-      height: Math.max(0, bounds.height - PAD * 2),
-    });
+  /** 纹理/包围盒可能晚几帧才就绪 */
+  function fitModelToViewWithRetry(widget, attempt) {
+    const n = attempt || 0;
+    const ok = fitModelToView(widget);
+    // 拟合成功后再上报，避免未缩放前的超大包围盒把整窗当成命中区
+    if (ok) reportHitBounds(widget);
+    if (ok || n >= 40) {
+      if (!ok) reportHitBounds(widget);
+      return;
+    }
+    setTimeout(() => fitModelToViewWithRetry(widget, n + 1), 100);
   }
+
 
   /**
    * 全屏视线跟踪：根据屏幕光标相对窗口中心更新 focusController
@@ -85,6 +145,8 @@
         reportHitBounds(widget);
       }
       boundsTick += 1;
+
+      // 点击穿透由主进程按 hitBounds 切换 setIgnoreMouseEvents，渲染侧不调 setMouseIgnore
 
       const model = widget && widget.model;
       const focus =
@@ -104,6 +166,27 @@
       fy = Math.max(-1, Math.min(1, fy));
       // Live2D 垂直方向与屏幕相反
       focus.focus(fx, -fy);
+    });
+  }
+
+  /**
+   * 把模型包围盒上报给主进程（拖动 / 动态点击穿透用）
+   */
+  function reportHitBounds(widget) {
+    const api = window.deskpet;
+    if (!api || !api.setHitBounds) return;
+    const model = widget && widget.model;
+    if (!model || typeof model.getBounds !== 'function') return;
+
+    const bounds = model.getBounds(true);
+    if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return;
+
+    const PAD = 12; // 略扩命中，避免角色边缘点到空白穿透
+    api.setHitBounds({
+      x: bounds.x - PAD,
+      y: bounds.y - PAD,
+      width: Math.max(0, bounds.width + PAD * 2),
+      height: Math.max(0, bounds.height + PAD * 2),
     });
   }
 
@@ -227,14 +310,7 @@
       .then((widget) => {
         fillContainer();
         // 等一帧再测量，确保纹理与 bounds 就绪
-        requestAnimationFrame(() => {
-          fitModelToView(widget);
-          reportHitBounds(widget);
-          requestAnimationFrame(() => {
-            fitModelToView(widget);
-            reportHitBounds(widget);
-          });
-        });
+        fitModelToViewWithRetry(widget, 0);
         setupScreenTracking(widget);
         setupInputReaction(widget);
         window.__deskpetWidget = widget;

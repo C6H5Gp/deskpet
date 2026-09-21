@@ -9,6 +9,13 @@ contextBridge.exposeInMainWorld('deskpet', {
     ipcRenderer.send('pet:hit-bounds', bounds);
   },
   /**
+   * 请求主进程设置鼠标忽略（点击穿透开启时）
+   * @param {boolean} ignore
+   */
+  setMouseIgnore: (ignore) => {
+    ipcRenderer.send('pet:mouse-ignore', !!ignore);
+  },
+  /**
    * 订阅全屏光标位置（主进程轮询，穿透时也能跟踪）
    * @param {(payload: {
    *   x:number,y:number,winX:number,winY:number,winW:number,winH:number,

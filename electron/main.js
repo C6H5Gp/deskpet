@@ -57,6 +57,32 @@ let visibilityWatchTimer = null;
 let recoverHideTimer = null;
 /** 正在 hide/show 重建表面，避免 hide 事件递归 */
 let recoveringSurface = false;
+/** recoveringSurface 置位时间（防卡死） */
+let recoveringSurfaceSince = 0;
+/** 窗口重建中（与看门狗/hide 互斥，防循环） */
+let recreatingWindow = false;
+/** 窗口创建时间，启动后短时间内忽略 display-metrics 强制恢复 */
+let windowCreatedAt = 0;
+/** 重建结束冷却截止时间戳 */
+let recreateCooldownUntil = 0;
+
+const logPath = () => path.join(app.getPath('userData'), 'deskpet-error.log');
+
+/** 追加异常/崩溃/重建原因到 userData/deskpet-error.log */
+function appendLog(message) {
+  try {
+    const line = `[${new Date().toISOString()}] ${message}\n`;
+    fs.mkdirSync(path.dirname(logPath()), { recursive: true });
+    fs.appendFileSync(logPath(), line, 'utf8');
+  } catch (err) {
+    console.error('deskpet-error.log 写入失败:', err);
+  }
+}
+
+function setRecoveringSurface(on) {
+  recoveringSurface = !!on;
+  recoveringSurfaceSince = on ? Date.now() : 0;
+}
 
 /** 纯修饰键，不触发桌宠动作 */
 const KEY_IGNORE = new Set([
@@ -294,9 +320,9 @@ function startCursorTracking() {
       screenH: area.height,
     });
 
-    // 点击穿透关闭时：按命中区动态开关穿透（不依赖透明像素能否点中）
-    if (!settings.clickThrough && !dragState) {
-      setMouseIgnore(!isCursorOverHit(cursor));
+    // 点击穿透开启时：整窗（含本体）穿透；关闭则整窗接收鼠标
+    if (settings.clickThrough && !dragState) {
+      setMouseIgnore(true);
     }
   }, 33); // ~30fps
 }
@@ -335,9 +361,11 @@ function startDragTracking() {
       if (!leftDown) {
         dragState = null;
         persistWindowPosition();
-        // 松手后按当前位置恢复穿透策略
-        if (!settings.clickThrough) {
-          setMouseIgnore(!isCursorOverHit(cursor));
+        // 松手后恢复：开启穿透=继续整窗穿透；关闭=接收鼠标
+        if (settings.clickThrough) {
+          setMouseIgnore(true);
+        } else {
+          setMouseIgnore(false);
         }
       } else {
         const dx = Math.abs(cursor.x - dragState.startX);
@@ -356,7 +384,7 @@ function startDragTracking() {
       return;
     }
 
-    // 点击穿透开启时不拖；关闭时在角色命中区按下左键开始拖
+    // 仅关闭穿透时可拖；开启穿透时整窗忽略鼠标
     if (
       !settings.clickThrough &&
       leftDown &&
@@ -383,7 +411,8 @@ let ignoringMouse = null;
 
 /**
  * 设置鼠标穿透。
- * 关闭「点击穿透」时：未命中角色用 forward 穿透，命中角色时关闭穿透；
+ * 开启「点击穿透」时：未命中角色忽略鼠标（空白穿透），命中角色时关闭忽略以便点击/拖动；
+ * 开启穿透时由主进程按命中区轮询切换 ignore；forward:true 便于部分 Windows 上命中探测更稳。
  * 拖动本身由主进程全局左键轮询完成，不依赖透明像素能否收到 DOM 事件。
  */
 function setMouseIgnore(ignore) {
@@ -392,6 +421,8 @@ function setMouseIgnore(ignore) {
   if (ignoringMouse === next) return;
   ignoringMouse = next;
   if (next) {
+    // forward:true keeps move delivery for hit probing on some Windows builds;
+    // click-through itself still depends on toggling ignore off over the character.
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
   } else {
     mainWindow.setIgnoreMouseEvents(false);
@@ -400,14 +431,13 @@ function setMouseIgnore(ignore) {
 
 function applyClickThrough(enabled) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  // 切换模式时强制重设；关闭穿透时由光标轮询按命中区接管
+  // 开启=整窗穿透（含本体）；关闭=整窗接收鼠标
   ignoringMouse = null;
   dragState = null;
   if (enabled) {
     setMouseIgnore(true);
   } else {
-    const cursor = screen.getCursorScreenPoint();
-    setMouseIgnore(!isCursorOverHit(cursor));
+    setMouseIgnore(false);
   }
   if (!mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('pet:click-through', { enabled: !!enabled });
@@ -420,12 +450,13 @@ function applyClickThrough(enabled) {
  */
 function ensureMainWindowShown(forceCycle = false) {
   if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
-  if (recoveringSurface) return;
-  recoveringSurface = true;
+  if (recoveringSurface || recreatingWindow || Date.now() < recreateCooldownUntil) return;
+  setRecoveringSurface(true);
+  appendLog(`ensureMainWindowShown forceCycle=${!!forceCycle}`);
 
   const finish = () => {
     if (!petVisible || !mainWindow || mainWindow.isDestroyed()) {
-      recoveringSurface = false;
+      setRecoveringSurface(false);
       return;
     }
     try {
@@ -437,18 +468,23 @@ function ensureMainWindowShown(forceCycle = false) {
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
     mainWindow.setBackgroundColor('#00000000');
     applyClickThrough(settings.clickThrough);
-    recoveringSurface = false;
+    setRecoveringSurface(false);
   };
 
   try {
+    // 不再 hide()/show 硬切：Windows 透明窗 hide 会丢掉 WebGL/Live2D 表面（闪一下没了）
     if (forceCycle) {
-      mainWindow.hide();
-      setTimeout(finish, 40);
+      try { mainWindow.setOpacity(0.99); } catch { /* ignore */ }
+      setTimeout(() => {
+        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setOpacity(1); } catch { /* ignore */ }
+        finish();
+      }, 40);
       return;
     }
     finish();
   } catch (err) {
-    recoveringSurface = false;
+    setRecoveringSurface(false);
+    appendLog(`ensureMainWindowShown error: ${err && err.message ? err.message : err}`);
     console.error('恢复桌宠窗口失败:', err);
   }
 }
@@ -468,7 +504,17 @@ function startVisibilityWatch() {
   stopVisibilityWatch();
   visibilityWatchTimer = setInterval(() => {
     if (!petVisible || !mainWindow || mainWindow.isDestroyed()) return;
-    if (recoveringSurface) return;
+    // 重建窗口冷却期内不 forceCycle，避免与 recreate 打架成环
+    if (recreatingWindow || Date.now() < recreateCooldownUntil) return;
+    // recoveringSurface 卡死 >3s 则强制复位，避免永久跳过恢复
+    if (recoveringSurface) {
+      if (recoveringSurfaceSince && Date.now() - recoveringSurfaceSince > 3000) {
+        appendLog('recoveringSurface stuck >3s, reset flag');
+        setRecoveringSurface(false);
+      } else {
+        return;
+      }
+    }
     let visible = false;
     try {
       visible = mainWindow.isVisible();
@@ -477,17 +523,28 @@ function startVisibilityWatch() {
     }
     if (!visible) {
       // 系统藏窗或 Electron 可见性脱节 → 用 hide/show 重建（等同托盘隐藏再显示）
-      ensureMainWindowShown(true);
+      appendLog('visibilityWatch: isVisible=false → hide/show recover');
+      ensureMainWindowShown(false);
       return;
     }
-    // 仍可见时定期重申置顶与不透明，缓解透明层偶发丢绘
+    // 仍可见时定期重申置顶与不透明；opacity 异常则强制复位
     try {
+      let opacity = 1;
+      try {
+        opacity = mainWindow.getOpacity();
+      } catch {
+        opacity = 1;
+      }
+      if (!Number.isFinite(opacity) || opacity < 0.99 || opacity > 1.01) {
+        appendLog(`visibilityWatch: weird opacity=${opacity} → reset 1`);
+        mainWindow.setOpacity(1);
+      }
       mainWindow.setAlwaysOnTop(true, 'screen-saver');
       mainWindow.setOpacity(1);
     } catch {
       // 忽略
     }
-  }, 2000);
+  }, 800);
 }
 
 /**
@@ -603,7 +660,49 @@ function buildTrayMenu() {
   ]);
 }
 
+/**
+ * 渲染进程崩溃/无响应时销毁并重建窗口，保留托盘。
+ */
+function recreateMainWindow(reason) {
+  if (recreatingWindow || Date.now() < recreateCooldownUntil) return;
+  recreatingWindow = true;
+  appendLog(`recreateMainWindow: ${reason}`);
+  try {
+    persistWindowPosition();
+  } catch {
+    // 忽略
+  }
+  stopVisibilityWatch();
+  stopCursorTracking();
+  stopInputTracking();
+  stopDragTracking();
+  setRecoveringSurface(false);
+  const old = mainWindow;
+  mainWindow = null;
+  if (old && !old.isDestroyed()) {
+    try {
+      old.removeAllListeners();
+      old.destroy();
+    } catch (err) {
+      appendLog(`destroy old window failed: ${err && err.message ? err.message : err}`);
+    }
+  }
+  try {
+    createWindow();
+  } catch (err) {
+    appendLog(`createWindow after recreate failed: ${err && err.message ? err.message : err}`);
+    console.error('重建窗口失败:', err);
+  } finally {
+    // ~1.5s 冷却：ready-to-show / 看门狗 / hide 不会立刻再 forceCycle
+    recreateCooldownUntil = Date.now() + 1500;
+    setTimeout(() => {
+      recreatingWindow = false;
+    }, 1500);
+  }
+}
+
 function createWindow() {
+  windowCreatedAt = Date.now();
   const { x, y } = resolveWindowPosition();
 
   Menu.setApplicationMenu(null);
@@ -642,7 +741,26 @@ function createWindow() {
   mainWindow.setMenu(null);
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  // 全屏游戏/其它工作区仍尽量可见（API 存在时）
+  if (typeof mainWindow.setVisibleOnAllWorkspaces === 'function') {
+    try {
+      mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } catch (err) {
+      appendLog(`setVisibleOnAllWorkspaces failed: ${err && err.message ? err.message : err}`);
+    }
+  }
   mainWindow.loadFile(path.join(__dirname, '..', 'deskpet', 'pet.html'));
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    appendLog(
+      `render-process-gone: reason=${details && details.reason} exitCode=${details && details.exitCode}`
+    );
+    recreateMainWindow('render-process-gone');
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    appendLog('webContents unresponsive');
+    recreateMainWindow('unresponsive');
+  });
 
   mainWindow.once('ready-to-show', () => {
     applyClickThrough(settings.clickThrough);
@@ -654,11 +772,14 @@ function createWindow() {
 
   // 系统「显示桌面」等会直接 hide，此时 petVisible 仍为 true → 自动拉回
   mainWindow.on('hide', () => {
-    if (!petVisible || recoveringSurface) return;
+    if (!petVisible || recoveringSurface || recreatingWindow) return;
+    if (Date.now() < recreateCooldownUntil) return;
     if (recoverHideTimer) clearTimeout(recoverHideTimer);
     recoverHideTimer = setTimeout(() => {
       recoverHideTimer = null;
-      if (petVisible) ensureMainWindowShown(true);
+      if (!petVisible || recreatingWindow || Date.now() < recreateCooldownUntil) return;
+      appendLog('hide event → Win+D/system hide recover');
+      ensureMainWindowShown(false);
     }, 80);
   });
 
@@ -689,6 +810,11 @@ function createTray() {
 }
 
 function setupIpc() {
+  /** 渲染进程 ignore 请求：暂不采纳（containsPoint 易误判导致整窗穿透）；主进程 hitBounds 轮询为准 */
+  ipcMain.on('pet:mouse-ignore', (_event, _ignore) => {
+    // intentionally ignored
+  });
+
   /** 渲染进程上报角色包围盒（窗口客户区坐标） */
   ipcMain.on('pet:hit-bounds', (_event, bounds) => {
     if (
@@ -700,19 +826,68 @@ function setupIpc() {
     ) {
       return;
     }
-    hitBounds = {
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
-    };
+    const x = bounds.x;
+    const y = bounds.y;
+    const width = bounds.width;
+    const height = bounds.height;
+    // 拒绝异常过大的命中框（几乎整窗），避免「开启穿透却完全点不到下层」
+    if (width >= WIN_W * 0.95 && height >= WIN_H * 0.95) {
+      return;
+    }
+    hitBounds = { x, y, width, height };
   });
 
   ipcMain.handle('pet:get-click-through', () => !!settings.clickThrough);
 }
 
+// 单实例：第二进程退出，并把焦点/显示交给第一进程
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    appendLog('second-instance → restore window');
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      if (app.isReady()) createWindow();
+      return;
+    }
+    try {
+      mainWindow.setOpacity(1);
+    } catch {
+      // 忽略
+    }
+    mainWindow.show();
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    showMainWindow();
+  });
+}
+
+app.on('child-process-gone', (_event, details) => {
+  appendLog(
+    `child-process-gone: type=${details && details.type} reason=${details && details.reason} exitCode=${details && details.exitCode} name=${(details && details.name) || ''}`
+  );
+});
+
+process.on('uncaughtException', (err) => {
+  appendLog(`uncaughtException: ${err && err.stack ? err.stack : err}`);
+  console.error('uncaughtException:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const msg =
+    reason && reason.stack
+      ? reason.stack
+      : reason && reason.message
+        ? reason.message
+        : String(reason);
+  appendLog(`unhandledRejection: ${msg}`);
+  console.error('unhandledRejection:', reason);
+});
+
 app.whenReady().then(() => {
+  if (!gotTheLock) return;
   settings = loadSettings();
+  appendLog('app ready');
   // 首次或偏好为真时同步登录项
   if (typeof settings.openAtLogin !== 'boolean') {
     settings.openAtLogin = true;
@@ -724,7 +899,11 @@ app.whenReady().then(() => {
   // 休眠唤醒 / 解锁 / 分辨率变化后，透明层常丢绘，主动重建
   const recoverAfterSystemChange = () => {
     if (!petVisible) return;
-    setTimeout(() => ensureMainWindowShown(true), 120);
+    if (windowCreatedAt && Date.now() - windowCreatedAt < 5000) {
+      appendLog('skip recoverAfterSystemChange: within 5s of createWindow');
+      return;
+    }
+    setTimeout(() => ensureMainWindowShown(false), 120);
   };
   powerMonitor.on('resume', recoverAfterSystemChange);
   powerMonitor.on('unlock-screen', recoverAfterSystemChange);
