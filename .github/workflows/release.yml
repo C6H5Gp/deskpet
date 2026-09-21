@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installers
+        run: npx electron-builder --win
+
+      - name: Prepare GitHub Release assets
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $pkg = Get-Content -Raw -Path "package.json" | ConvertFrom-Json
+          $version = [string]$pkg.version
+          $tagVersion = $env:TAG_NAME -replace "^v", ""
+          if ($tagVersion -ne $version) {
+            throw "Tag '$($env:TAG_NAME)' does not match package.json version '$version'. Update version before tagging."
+          }
+
+          $dist = Join-Path $PWD "dist"
+          $out = Join-Path $PWD "release-assets"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          $exes = @(Get-ChildItem -Path $dist -File -Filter "*.exe")
+          if ($exes.Count -eq 0) {
+            throw "No .exe artifacts found in dist/"
+          }
+
+          $installer = $exes | Where-Object { $_.BaseName -notmatch "portable" } | Select-Object -First 1
+          $portable = $exes | Where-Object { $_.BaseName -match "portable" } | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer .exe not found in dist/" }
+          if (-not $portable) { throw "Portable .exe not found in dist/" }
+
+          $installerDest = "deskpet-$version-win-x64.exe"
+          $portableDest = "deskpet-$version-portable.exe"
+
+          Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $out $installerDest)
+          Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $out $portableDest)
+
+          $installerBlockmap = "$($installer.FullName).blockmap"
+          if (Test-Path -LiteralPath $installerBlockmap) {
+            Copy-Item -LiteralPath $installerBlockmap -Destination (Join-Path $out "$installerDest.blockmap")
+          }
+          $portableBlockmap = "$($portable.FullName).blockmap"
+          if (Test-Path -LiteralPath $portableBlockmap) {
+            Copy-Item -LiteralPath $portableBlockmap -Destination (Join-Path $out "$portableDest.blockmap")
+          }
+
+          $latestSrc = Join-Path $dist "latest.yml"
+          if (Test-Path -LiteralPath $latestSrc) {
+            $yml = [System.IO.File]::ReadAllText($latestSrc)
+            $replacements = @{
+              $installer.Name = $installerDest
+              $portable.Name = $portableDest
+              ([uri]::EscapeDataString($installer.Name)) = $installerDest
+              ([uri]::EscapeDataString($portable.Name)) = $portableDest
+            }
+            foreach ($pair in $replacements.GetEnumerator()) {
+              if ($pair.Key) {
+                $yml = $yml.Replace($pair.Key, $pair.Value)
+              }
+            }
+            [System.IO.File]::WriteAllText((Join-Path $out "latest.yml"), $yml)
+          }
+
+          $sumLines = foreach ($name in @($installerDest, $portableDest)) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          [System.IO.File]::WriteAllText(
+            (Join-Path $out "SHA256SUMS.txt"),
+            (($sumLines -join "`n") + "`n")
+          )
+
+          $notes = @(
+            "## 桌宠 $version / deskpet $version"
+            ""
+            "Windows NSIS 安装包与便携版。**构建未签名**，SmartScreen 可能提示「未知发布者」，选择「仍要运行」即可。"
+            ""
+            "This Windows build is **unsigned**. SmartScreen may warn about an unknown publisher; choose **Run anyway**."
+            ""
+            "### 下载 / Downloads"
+            ""
+            "| 文件 / File | 说明 / Description |"
+            "| --- | --- |"
+            "| ``$installerDest`` | NSIS 安装包 / installer (x64) |"
+            "| ``$portableDest`` | 便携版 / portable |"
+            "| ``SHA256SUMS.txt`` | SHA-256 校验 / checksums |"
+            ""
+            "### 校验 / Verify"
+            ""
+            "``````"
+            "certutil -hashfile $installerDest SHA256"
+            "``````"
+            ""
+          ) -join "`n"
+          [System.IO.File]::WriteAllText((Join-Path $PWD "release-notes.md"), $notes)
+
+          Get-ChildItem -LiteralPath $out | ForEach-Object { Write-Host "asset: $($_.Name) ($($_.Length) bytes)" }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: deskpet ${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*

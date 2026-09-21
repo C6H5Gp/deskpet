@@ -34,6 +34,25 @@ npm run dist        # 安装包 + 便携版 → dist/
 npm run dist:dir    # 未打包目录，便于本机热替换 asar
 ```
 
+产物默认带中文 `productName`（`桌宠-…exe`）。GitHub Release 会改名为 ASCII：`deskpet-<version>-win-x64.exe` / `deskpet-<version>-portable.exe`。
+
+## CI/CD
+
+[![CI](https://github.com/C6H5Gp/deskpet/actions/workflows/ci.yml/badge.svg)](https://github.com/C6H5Gp/deskpet/actions/workflows/ci.yml)
+
+- **CI**（`push` / `pull_request` → `main`）：`windows-latest` + Node 22，`npm ci` 后执行 `electron-builder --win --dir` 打包冒烟检查（只出未打包目录，不上传安装包）。
+- **Release**（推送 `v*` 标签）：完整 `electron-builder --win`，创建/更新 [GitHub Release](https://github.com/C6H5Gp/deskpet/releases)，上传 NSIS + 便携 exe、`.blockmap`、`latest.yml`、`SHA256SUMS.txt`。构建未签名，SmartScreen 可能拦截。
+
+发布新版本（标签版本须与 `package.json` 的 `version` 一致）：
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+- [Actions](https://github.com/C6H5Gp/deskpet/actions)
+- [Releases](https://github.com/C6H5Gp/deskpet/releases)
+
 ## 目录
 
 | 路径 | 说明 |
