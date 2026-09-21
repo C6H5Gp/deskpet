@@ -15,3 +15,7 @@ _hotfix_backup/
 .idea/
 .vscode/
 *.asar
+
+# local transfer leftovers
+*.bundle
+
