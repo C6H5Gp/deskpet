@@ -411,8 +411,8 @@ let ignoringMouse = null;
 
 /**
  * 设置鼠标穿透。
- * 开启「点击穿透」时：未命中角色忽略鼠标（空白穿透），命中角色时关闭忽略以便点击/拖动；
- * 开启穿透时由主进程按命中区轮询切换 ignore；forward:true 便于部分 Windows 上命中探测更稳。
+ * 开启：整窗忽略鼠标（点击落到下层）。forward:true 仍把 mousemove 送进页面，径向透视靠它跟光标。
+ * 关闭：恢复接收鼠标，点击与拖动按原逻辑工作。
  * 拖动本身由主进程全局左键轮询完成，不依赖透明像素能否收到 DOM 事件。
  */
 function setMouseIgnore(ignore) {
@@ -421,8 +421,7 @@ function setMouseIgnore(ignore) {
   if (ignoringMouse === next) return;
   ignoringMouse = next;
   if (next) {
-    // forward:true keeps move delivery for hit probing on some Windows builds;
-    // click-through itself still depends on toggling ignore off over the character.
+    // forward:true：穿透时页面仍能收到 mousemove（径向透视）。点击不会进页面。
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
   } else {
     mainWindow.setIgnoreMouseEvents(false);

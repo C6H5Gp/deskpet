@@ -4,6 +4,102 @@
 (function () {
   const FIT_PADDING = 16;
 
+  /** 穿透开启时，光标周围桌面透视半径（CSS 像素）。v1 常量，无设置页。 */
+  const REVEAL_RADIUS_PX = 120;
+
+  /**
+   * 点击穿透开启时，用 CSS 径向遮罩在光标处镂空角色：
+   * 中心完全透明，向外线性渐变到不透明。关闭穿透时立刻去掉遮罩。
+   * 位置优先用转发来的 mousemove（rAF 合并），窗口外用主进程全局光标补齐。
+   */
+  function setupDesktopReveal() {
+    const api = window.deskpet;
+    if (!api || !api.onCursor || !api.onClickThrough || !api.getClickThrough) return;
+
+    const root = document.documentElement;
+    root.style.setProperty('--deskpet-reveal-r', REVEAL_RADIUS_PX + 'px');
+
+    let enabled = false;
+    let localX = NaN;
+    let localY = NaN;
+    let appliedX = NaN;
+    let appliedY = NaN;
+    let raf = 0;
+    let lastDomMove = 0;
+    /** getClickThrough 返回前若已收到托盘事件，丢弃过期的初始值 */
+    let clickThroughRev = 0;
+
+    function applyPosition() {
+      raf = 0;
+      if (!enabled) return;
+      if (!Number.isFinite(localX) || !Number.isFinite(localY)) return;
+      const x = Math.round(localX * 10) / 10;
+      const y = Math.round(localY * 10) / 10;
+      if (x === appliedX && y === appliedY) return;
+      appliedX = x;
+      appliedY = y;
+      root.style.setProperty('--deskpet-reveal-x', x + 'px');
+      root.style.setProperty('--deskpet-reveal-y', y + 'px');
+    }
+
+    function schedule() {
+      if (!enabled || raf) return;
+      raf = requestAnimationFrame(applyPosition);
+    }
+
+    function setLocal(x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      localX = x;
+      localY = y;
+      schedule();
+    }
+
+    function setEnabled(on) {
+      clickThroughRev += 1;
+      enabled = !!on;
+      if (!enabled) {
+        if (raf) {
+          cancelAnimationFrame(raf);
+          raf = 0;
+        }
+        root.classList.remove('deskpet-reveal');
+        appliedX = NaN;
+        appliedY = NaN;
+        return;
+      }
+      root.classList.add('deskpet-reveal');
+      schedule();
+    }
+
+    api.onClickThrough((payload) => {
+      setEnabled(!!(payload && payload.enabled));
+    });
+
+    api.onCursor((payload) => {
+      if (!payload) return;
+      // 窗口内 mousemove 更跟手；刚收到 DOM 事件时忽略这帧 IPC，避免两路坐标来回跳
+      if (performance.now() - lastDomMove < 50) return;
+      setLocal(payload.x - payload.winX, payload.y - payload.winY);
+    });
+
+    window.addEventListener(
+      'mousemove',
+      (ev) => {
+        lastDomMove = performance.now();
+        setLocal(ev.clientX, ev.clientY);
+      },
+      { passive: true, capture: true }
+    );
+
+    const revAtRequest = clickThroughRev;
+    api.getClickThrough().then((on) => {
+      if (clickThroughRev !== revAtRequest) return;
+      setEnabled(!!on);
+    }).catch(() => {});
+  }
+
+  setupDesktopReveal();
+
   function fillContainer() {
     const container = document.getElementById('live2d-widget-container');
     const canvas = document.getElementById('live2d-widget-canvas');

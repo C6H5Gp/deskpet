@@ -36,6 +36,28 @@
     #live2d-widget-canvas:active {
       cursor: grabbing;
     }
+    /*
+     * 仅 html.deskpet-reveal（点击穿透开启）时生效。
+     * 遮罩 alpha：中心 0（看见下层桌面）→ 半径处 1（角色完全不透明），半径外保持不透明。
+     * 坐标是视口 CSS 像素，由 desktop-init.js 写入 --deskpet-reveal-x/y。
+     */
+    html.deskpet-reveal body {
+      --deskpet-reveal-r: 120px;
+      -webkit-mask-image: radial-gradient(
+        circle var(--deskpet-reveal-r) at var(--deskpet-reveal-x, -10000px) var(--deskpet-reveal-y, -10000px),
+        rgba(0, 0, 0, 0) 0%,
+        rgba(0, 0, 0, 1) 100%
+      );
+      mask-image: radial-gradient(
+        circle var(--deskpet-reveal-r) at var(--deskpet-reveal-x, -10000px) var(--deskpet-reveal-y, -10000px),
+        rgba(0, 0, 0, 0) 0%,
+        rgba(0, 0, 0, 1) 100%
+      );
+      -webkit-mask-repeat: no-repeat;
+      mask-repeat: no-repeat;
+      -webkit-mask-mode: alpha;
+      mask-mode: alpha;
+    }
   </style>
 </head>
 <body>
