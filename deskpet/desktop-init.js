@@ -1,11 +1,11 @@
-/**
+﻿/**
  * Electron 桌宠初始化：按包围盒缩放并贴齐窗口右下，避免角色往中间缩
  */
 (function () {
   const FIT_PADDING = 16;
 
   /** 穿透开启时，光标周围桌面透视半径（CSS 像素）。v1 常量，无设置页。 */
-  const REVEAL_RADIUS_PX = 120;
+  const REVEAL_RADIUS_PX = 70;
 
   /**
    * 点击穿透开启时，用 CSS 径向遮罩在光标处镂空角色：

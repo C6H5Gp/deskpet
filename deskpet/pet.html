@@ -42,15 +42,19 @@
      * 坐标是视口 CSS 像素，由 desktop-init.js 写入 --deskpet-reveal-x/y。
      */
     html.deskpet-reveal body {
-      --deskpet-reveal-r: 120px;
+      --deskpet-reveal-r: 70px;
       -webkit-mask-image: radial-gradient(
         circle var(--deskpet-reveal-r) at var(--deskpet-reveal-x, -10000px) var(--deskpet-reveal-y, -10000px),
         rgba(0, 0, 0, 0) 0%,
+        rgba(0, 0, 0, 0) 45%,
+        rgba(0, 0, 0, 1) 78%,
         rgba(0, 0, 0, 1) 100%
       );
       mask-image: radial-gradient(
         circle var(--deskpet-reveal-r) at var(--deskpet-reveal-x, -10000px) var(--deskpet-reveal-y, -10000px),
         rgba(0, 0, 0, 0) 0%,
+        rgba(0, 0, 0, 0) 45%,
+        rgba(0, 0, 0, 1) 78%,
         rgba(0, 0, 0, 1) 100%
       );
       -webkit-mask-repeat: no-repeat;
