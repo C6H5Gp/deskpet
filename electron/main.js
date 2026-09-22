@@ -105,19 +105,30 @@ let petVisible = true;
 
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
+/**
+ * 已有 settings.json 里 clickThrough 缺键或不是布尔时，启动后写成 true。
+ * 不覆盖用户已保存的 false。全新安装没有文件时只靠代码默认值，不额外建文件。
+ */
+let clickThroughMissing = false;
+
 function loadSettings() {
+  clickThroughMissing = false;
   try {
     const raw = fs.readFileSync(settingsPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.clickThrough !== 'boolean') {
+      clickThroughMissing = true;
+    }
     return {
-      clickThrough: false,
+      clickThrough: true,
       openAtLogin: true,
       windowX: null,
       windowY: null,
-      ...JSON.parse(raw),
+      ...parsed,
     };
   } catch {
     return {
-      clickThrough: false,
+      clickThrough: true,
       openAtLogin: true,
       windowX: null,
       windowY: null,
@@ -136,7 +147,7 @@ function saveSettings(next) {
 }
 
 let settings = {
-  clickThrough: false,
+  clickThrough: true,
   openAtLogin: true,
   windowX: null,
   windowY: null,
@@ -892,6 +903,11 @@ app.whenReady().then(() => {
   if (typeof settings.openAtLogin !== 'boolean') {
     settings.openAtLogin = true;
     saveSettings({ openAtLogin: true });
+  }
+  // 缺 clickThrough 或值不是布尔时默认开启并落盘；已保存的 false 保持不变
+  if (clickThroughMissing || typeof settings.clickThrough !== 'boolean') {
+    settings.clickThrough = true;
+    saveSettings({ clickThrough: true });
   }
   applyOpenAtLogin(settings.openAtLogin);
   setupIpc();
