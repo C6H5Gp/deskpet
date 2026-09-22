@@ -1,21 +1,53 @@
+# 发版。
+# - 推送到 main：决定版本、构建、推送附注标签、创建 Release，都在这一次运行里完成。
+#   默认 GITHUB_TOKEN 推上去的标签不会再触发 workflow，所以不能只推标签、指望下面的 tag 路径补跑。
+# - 推送 v* 标签：不改版本，只构建并创建 Release（手动 npm version 后 push --follow-tags）。
+# - workflow_dispatch：从最新 main 发版。当前版本若还没有 Release，则补发，不再递增。
+# main 上的 electron-builder --dir 冒烟仍只在 ci.yml，这里不替代它。
+
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "在 main 上选择 patch、minor 或 major。若该版本还没有 Release，则补发而不再递增。"
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
 
+concurrency:
+  group: deskpet-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip release]'))
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -23,16 +55,35 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - name: Resolve version
+        id: ver
+        shell: bash
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_BUMP: ${{ github.event.inputs.bump || 'patch' }}
+          RELEASE_BASE_SHA: ${{ github.sha }}
+        run: bash scripts/release.sh prepare
+
+      - name: Commit version and annotated tag
+        id: sealed
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.push == 'true'
+        shell: bash
+        run: bash scripts/release.sh seal
+
       - name: Install dependencies
+        if: steps.ver.outputs.skip != 'true'
         run: npm ci
 
       - name: Build Windows installers
+        if: steps.ver.outputs.skip != 'true'
         run: npx electron-builder --win
 
       - name: Prepare GitHub Release assets
+        if: steps.ver.outputs.skip != 'true'
         shell: pwsh
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: v${{ steps.ver.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -124,10 +175,21 @@ jobs:
 
           Get-ChildItem -LiteralPath $out | ForEach-Object { Write-Host "asset: $($_.Name) ($($_.Length) bytes)" }
 
+      - name: Push commit and annotated tag
+        id: pushed
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.push == 'true'
+        shell: bash
+        env:
+          RELEASE_BASE_SHA: ${{ github.sha }}
+        run: bash scripts/release.sh push
+
       - name: Create GitHub Release
+        if: steps.ver.outputs.skip != 'true' && steps.pushed.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          name: deskpet ${{ github.ref_name }}
+          tag_name: v${{ steps.ver.outputs.version }}
+          target_commitish: ${{ steps.sealed.outputs.commit || steps.ver.outputs.commit }}
+          name: deskpet v${{ steps.ver.outputs.version }}
           body_path: release-notes.md
           draft: false
           prerelease: false
