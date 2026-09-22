@@ -109,7 +109,7 @@ function loadSettings() {
   try {
     const raw = fs.readFileSync(settingsPath(), 'utf8');
     return {
-      clickThrough: false,
+      clickThrough: true,
       openAtLogin: true,
       windowX: null,
       windowY: null,
@@ -117,7 +117,7 @@ function loadSettings() {
     };
   } catch {
     return {
-      clickThrough: false,
+      clickThrough: true,
       openAtLogin: true,
       windowX: null,
       windowY: null,
@@ -136,7 +136,7 @@ function saveSettings(next) {
 }
 
 let settings = {
-  clickThrough: false,
+  clickThrough: true,
   openAtLogin: true,
   windowX: null,
   windowY: null,
@@ -888,6 +888,11 @@ app.whenReady().then(() => {
   if (!gotTheLock) return;
   settings = loadSettings();
   appendLog('app ready');
+  // 非布尔时默认开启并写回；显式 false 不覆盖（缺失键已由 loadSettings 默认为 true）
+  if (typeof settings.clickThrough !== 'boolean') {
+    settings.clickThrough = true;
+    saveSettings({ clickThrough: true });
+  }
   // 首次或偏好为真时同步登录项
   if (typeof settings.openAtLogin !== 'boolean') {
     settings.openAtLogin = true;
