@@ -1,0 +1,2 @@
+# Windows runner 上 autocrlf 会把 shell 脚本变成 CRLF，bash 会直接失败。
+*.sh text eol=lf
